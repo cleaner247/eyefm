@@ -1,0 +1,12 @@
+disease,group,subtype,subject,info_id,info_id_with_suffix,task,source_suffix,relative_npz,original_trial_index,direction,n_samples,trial_npz,left_final_keep,right_final_keep
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0006.npz,6,7,241,,True,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0018.npz,18,3,160,,True,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0030.npz,30,7,186,,True,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0042.npz,42,3,86,,True,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0054.npz,54,7,222,,True,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0066.npz,66,3,203,,True,False
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0078.npz,78,7,317,,False,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0090.npz,90,3,143,,True,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0102.npz,102,7,292,,False,False
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0114.npz,114,3,195,,True,True
+synthetic,fixture,fixture,S006,S006,S006_D,MemorySaccade,D,MemorySaccade/synthetic_S006_D_trial0126.npz,126,7,283,,True,True

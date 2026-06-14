@@ -1,0 +1,31 @@
+# Python/cache artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local/editor artifacts
+.DS_Store
+*.swp
+*.tmp
+*.log
+.agents/
+.codex/
+
+# Local Codex handoff notes, not project documentation
+CODEX_TMUX_HANDOFF.md
+EYEMAE_CONTINUATION_FOR_CODEX.md
+
+# Training outputs and model artifacts are intentionally not tracked.
+outputs/*
+!outputs/area_stats_subject_heldout_seed42.json
+!outputs/debug_area_stats.json
+*.pt
+*.pth
+*.ckpt
+
+# Optional local data folders
+data/
+datasets/

@@ -1,0 +1,11 @@
+disease,group,subtype,subject,info_id,info_id_with_suffix,task,source_suffix,relative_npz,original_trial_index,direction,n_samples,trial_npz,left_final_keep,right_final_keep
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0008.npz,8,1,241,,False,True
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0020.npz,20,5,316,,False,True
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0032.npz,32,1,293,,False,True
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0044.npz,44,5,129,,True,False
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0056.npz,56,1,270,,False,True
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0068.npz,68,5,110,,False,False
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0080.npz,80,1,234,,False,True
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0092.npz,92,5,177,,False,True
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0104.npz,104,1,227,,False,True
+synthetic,fixture,fixture,S008,S008,S008_R,ProSaccade,R,ProSaccade/synthetic_S008_R_trial0116.npz,116,5,301,,False,True

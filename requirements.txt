@@ -1,0 +1,7 @@
+numpy
+pyyaml
+torch
+matplotlib
+tensorboard
+pytest
+

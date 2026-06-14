@@ -1,0 +1,57 @@
+{
+  "strategy": "trial_random",
+  "seed": 42,
+  "train_ratio": 0.98,
+  "val_ratio": 0.02,
+  "test_ratio": 0.0,
+  "group_by_base_subject_id": false,
+  "num_train_trials": 125,
+  "num_val_trials": 3,
+  "num_test_trials": 0,
+  "num_train_subjects": 48,
+  "num_val_subjects": 3,
+  "num_test_subjects": 0,
+  "task_counts": {
+    "train": {
+      "0": 31,
+      "1": 32,
+      "2": 32,
+      "3": 30
+    },
+    "val": {
+      "0": 1,
+      "1": 0,
+      "2": 0,
+      "3": 2
+    },
+    "test": {
+      "0": 0,
+      "1": 0,
+      "2": 0,
+      "3": 0
+    }
+  },
+  "eye_availability_counts": {
+    "train": {
+      "D": 43,
+      "L": 41,
+      "R": 41,
+      "unknown": 0
+    },
+    "val": {
+      "D": 0,
+      "L": 2,
+      "R": 1,
+      "unknown": 0
+    },
+    "test": {
+      "D": 0,
+      "L": 0,
+      "R": 0,
+      "unknown": 0
+    }
+  },
+  "warnings": [
+    "val split missing task_ids: 1,2"
+  ]
+}

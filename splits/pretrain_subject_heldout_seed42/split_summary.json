@@ -1,0 +1,55 @@
+{
+  "strategy": "subject_heldout",
+  "seed": 42,
+  "train_ratio": 0.9,
+  "val_ratio": 0.05,
+  "test_ratio": 0.05,
+  "group_by_base_subject_id": true,
+  "num_train_trials": 643370,
+  "num_val_trials": 35271,
+  "num_test_trials": 35505,
+  "num_train_subjects": 3812,
+  "num_val_subjects": 212,
+  "num_test_subjects": 211,
+  "task_counts": {
+    "train": {
+      "0": 165794,
+      "1": 156931,
+      "2": 164015,
+      "3": 156630
+    },
+    "val": {
+      "0": 9120,
+      "1": 8669,
+      "2": 9048,
+      "3": 8434
+    },
+    "test": {
+      "0": 9208,
+      "1": 8628,
+      "2": 9060,
+      "3": 8609
+    }
+  },
+  "eye_availability_counts": {
+    "train": {
+      "D": 550583,
+      "L": 45066,
+      "R": 47721,
+      "unknown": 0
+    },
+    "val": {
+      "D": 29686,
+      "L": 2815,
+      "R": 2770,
+      "unknown": 0
+    },
+    "test": {
+      "D": 31697,
+      "L": 1692,
+      "R": 2116,
+      "unknown": 0
+    }
+  },
+  "warnings": []
+}
