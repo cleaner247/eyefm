@@ -6,6 +6,12 @@ This repository contains the current EyeMAE first-version pretraining project fo
 docs/eyemae_codex_plan_engineered_clean.md
 ```
 
+Concrete pretraining/downstream run versions are tracked in:
+
+```text
+docs/eyemae_experiment_registry.md
+```
+
 The current main experiment is a task-conditioned masked reconstruction model:
 
 - per-trial 1000 Hz eye movement data
@@ -113,3 +119,18 @@ long_span linear_interpolation baseline masked_xy_rmse_deg = 4.216968
 ```
 
 The checkpoint files are not in Git. Use a release/artifact store for weights if needed.
+
+## Downstream Fine-Tuning
+
+The downstream disease-classification plan is in:
+
+```text
+docs/eyemae_downstream_finetune_codex_plan.md
+```
+
+Completed and active downstream run versions, including the fixed holdout run
+and the PD/addiction 5-fold run, are tracked in:
+
+```text
+docs/eyemae_experiment_registry.md
+```

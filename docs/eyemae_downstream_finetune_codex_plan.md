@@ -1754,3 +1754,22 @@ Pretrained partial/full > Scratch:
 Pretrained ≈ Scratch:
   检查 pooling、split、label噪声、样本量、预训练任务和疾病相关性。
 ```
+
+---
+
+# 22. 实际运行记录入口
+
+本文件是下游微调设计计划。已经完成或正在运行的训练/测试版本统一记录在：
+
+```text
+docs/eyemae_experiment_registry.md
+```
+
+其中包括：
+
+```text
+固定 holdout 下游微调版本
+PD相关/戒毒所 5-fold k-fold 版本
+每个版本使用的 config、split、output_root、launcher、summary 命令
+当前状态和如何复查 metrics_final 数量
+```

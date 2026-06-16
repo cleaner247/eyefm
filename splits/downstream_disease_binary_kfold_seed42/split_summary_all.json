@@ -1,0 +1,1412 @@
+{
+  "data_dir": "/mnt/disk_sde/data-260606/extracted/cd_no_cond2_structured_20260609",
+  "out_dir": "splits/downstream_disease_binary_kfold_seed42",
+  "strategy": "subject_stratified_kfold",
+  "seed": 42,
+  "num_folds": 5,
+  "diseases": {
+    "PD相关": {
+      "overall": {
+        "num_trials": 125578,
+        "num_subjects": 745,
+        "trial_label_counts": {
+          "0": 71263,
+          "1": 54315
+        },
+        "subject_label_counts": {
+          "0": 330,
+          "1": 415
+        },
+        "task_counts": {
+          "1": 31370,
+          "3": 29261,
+          "2": 31678,
+          "0": 33269
+        },
+        "group_counts": {
+          "患病": 54315,
+          "健康": 71263
+        },
+        "disease_counts": {
+          "PD相关": 125578
+        },
+        "eye_pattern_counts": {
+          "LR": 102931,
+          "R": 9083,
+          "L": 13564
+        },
+        "source_suffix_counts": {
+          "D": 109673,
+          "R": 6898,
+          "L": 9007
+        },
+        "max_trials_per_subject": 640,
+        "min_trials_per_subject": 1
+      },
+      "folds": [
+        {
+          "disease": "PD相关",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 125578,
+            "num_subjects": 745,
+            "trial_label_counts": {
+              "0": 71263,
+              "1": 54315
+            },
+            "subject_label_counts": {
+              "0": 330,
+              "1": 415
+            },
+            "task_counts": {
+              "1": 31370,
+              "3": 29261,
+              "2": 31678,
+              "0": 33269
+            },
+            "group_counts": {
+              "患病": 54315,
+              "健康": 71263
+            },
+            "disease_counts": {
+              "PD相关": 125578
+            },
+            "eye_pattern_counts": {
+              "LR": 102931,
+              "R": 9083,
+              "L": 13564
+            },
+            "source_suffix_counts": {
+              "D": 109673,
+              "R": 6898,
+              "L": 9007
+            },
+            "max_trials_per_subject": 640,
+            "min_trials_per_subject": 1
+          },
+          "splits": {
+            "train": {
+              "num_trials": 76636,
+              "num_subjects": 447,
+              "trial_label_counts": {
+                "0": 43169,
+                "1": 33467
+              },
+              "subject_label_counts": {
+                "0": 198,
+                "1": 249
+              },
+              "task_counts": {
+                "1": 18952,
+                "3": 18029,
+                "2": 19586,
+                "0": 20069
+              },
+              "eye_pattern_counts": {
+                "LR": 62594,
+                "R": 5541,
+                "L": 8501
+              },
+              "source_suffix_counts": {
+                "D": 66190,
+                "L": 5872,
+                "R": 4574
+              }
+            },
+            "val": {
+              "num_trials": 24006,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 13636,
+                "1": 10370
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6184,
+                "3": 5448,
+                "2": 6001,
+                "0": 6373
+              },
+              "eye_pattern_counts": {
+                "LR": 20037,
+                "L": 2114,
+                "R": 1855
+              },
+              "source_suffix_counts": {
+                "D": 21325,
+                "R": 1312,
+                "L": 1369
+              }
+            },
+            "test": {
+              "num_trials": 24936,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 14458,
+                "1": 10478
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "0": 6827,
+                "1": 6234,
+                "2": 6091,
+                "3": 5784
+              },
+              "eye_pattern_counts": {
+                "LR": 20300,
+                "R": 1687,
+                "L": 2949
+              },
+              "source_suffix_counts": {
+                "D": 22158,
+                "R": 1012,
+                "L": 1766
+              }
+            }
+          },
+          "fold_index": 0,
+          "num_folds": 5
+        },
+        {
+          "disease": "PD相关",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 125578,
+            "num_subjects": 745,
+            "trial_label_counts": {
+              "0": 71263,
+              "1": 54315
+            },
+            "subject_label_counts": {
+              "0": 330,
+              "1": 415
+            },
+            "task_counts": {
+              "1": 31370,
+              "3": 29261,
+              "2": 31678,
+              "0": 33269
+            },
+            "group_counts": {
+              "患病": 54315,
+              "健康": 71263
+            },
+            "disease_counts": {
+              "PD相关": 125578
+            },
+            "eye_pattern_counts": {
+              "LR": 102931,
+              "R": 9083,
+              "L": 13564
+            },
+            "source_suffix_counts": {
+              "D": 109673,
+              "R": 6898,
+              "L": 9007
+            },
+            "max_trials_per_subject": 640,
+            "min_trials_per_subject": 1
+          },
+          "splits": {
+            "train": {
+              "num_trials": 75657,
+              "num_subjects": 447,
+              "trial_label_counts": {
+                "0": 42985,
+                "1": 32672
+              },
+              "subject_label_counts": {
+                "0": 198,
+                "1": 249
+              },
+              "task_counts": {
+                "1": 18840,
+                "3": 17744,
+                "2": 19079,
+                "0": 19994
+              },
+              "eye_pattern_counts": {
+                "LR": 61971,
+                "R": 6037,
+                "L": 7649
+              },
+              "source_suffix_counts": {
+                "D": 66107,
+                "L": 4844,
+                "R": 4706
+              }
+            },
+            "val": {
+              "num_trials": 25915,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 14642,
+                "1": 11273
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6346,
+                "3": 6069,
+                "2": 6598,
+                "0": 6902
+              },
+              "eye_pattern_counts": {
+                "LR": 20923,
+                "R": 1191,
+                "L": 3801
+              },
+              "source_suffix_counts": {
+                "D": 22241,
+                "R": 880,
+                "L": 2794
+              }
+            },
+            "test": {
+              "num_trials": 24006,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 13636,
+                "1": 10370
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6184,
+                "3": 5448,
+                "2": 6001,
+                "0": 6373
+              },
+              "eye_pattern_counts": {
+                "LR": 20037,
+                "L": 2114,
+                "R": 1855
+              },
+              "source_suffix_counts": {
+                "D": 21325,
+                "R": 1312,
+                "L": 1369
+              }
+            }
+          },
+          "fold_index": 1,
+          "num_folds": 5
+        },
+        {
+          "disease": "PD相关",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 125578,
+            "num_subjects": 745,
+            "trial_label_counts": {
+              "0": 71263,
+              "1": 54315
+            },
+            "subject_label_counts": {
+              "0": 330,
+              "1": 415
+            },
+            "task_counts": {
+              "1": 31370,
+              "3": 29261,
+              "2": 31678,
+              "0": 33269
+            },
+            "group_counts": {
+              "患病": 54315,
+              "健康": 71263
+            },
+            "disease_counts": {
+              "PD相关": 125578
+            },
+            "eye_pattern_counts": {
+              "LR": 102931,
+              "R": 9083,
+              "L": 13564
+            },
+            "source_suffix_counts": {
+              "D": 109673,
+              "R": 6898,
+              "L": 9007
+            },
+            "max_trials_per_subject": 640,
+            "min_trials_per_subject": 1
+          },
+          "splits": {
+            "train": {
+              "num_trials": 75163,
+              "num_subjects": 447,
+              "trial_label_counts": {
+                "0": 42979,
+                "1": 32184
+              },
+              "subject_label_counts": {
+                "0": 198,
+                "1": 249
+              },
+              "task_counts": {
+                "1": 18910,
+                "3": 17469,
+                "2": 18815,
+                "0": 19969
+              },
+              "eye_pattern_counts": {
+                "LR": 61585,
+                "R": 6453,
+                "L": 7125
+              },
+              "source_suffix_counts": {
+                "D": 66072,
+                "R": 4891,
+                "L": 4200
+              }
+            },
+            "val": {
+              "num_trials": 24500,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 13642,
+                "1": 10858
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6114,
+                "3": 5723,
+                "2": 6265,
+                "0": 6398
+              },
+              "eye_pattern_counts": {
+                "LR": 20423,
+                "R": 1439,
+                "L": 2638
+              },
+              "source_suffix_counts": {
+                "D": 21360,
+                "L": 2013,
+                "R": 1127
+              }
+            },
+            "test": {
+              "num_trials": 25915,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 14642,
+                "1": 11273
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6346,
+                "3": 6069,
+                "2": 6598,
+                "0": 6902
+              },
+              "eye_pattern_counts": {
+                "LR": 20923,
+                "R": 1191,
+                "L": 3801
+              },
+              "source_suffix_counts": {
+                "D": 22241,
+                "R": 880,
+                "L": 2794
+              }
+            }
+          },
+          "fold_index": 2,
+          "num_folds": 5
+        },
+        {
+          "disease": "PD相关",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 125578,
+            "num_subjects": 745,
+            "trial_label_counts": {
+              "0": 71263,
+              "1": 54315
+            },
+            "subject_label_counts": {
+              "0": 330,
+              "1": 415
+            },
+            "task_counts": {
+              "1": 31370,
+              "3": 29261,
+              "2": 31678,
+              "0": 33269
+            },
+            "group_counts": {
+              "患病": 54315,
+              "健康": 71263
+            },
+            "disease_counts": {
+              "PD相关": 125578
+            },
+            "eye_pattern_counts": {
+              "LR": 102931,
+              "R": 9083,
+              "L": 13564
+            },
+            "source_suffix_counts": {
+              "D": 109673,
+              "R": 6898,
+              "L": 9007
+            },
+            "max_trials_per_subject": 640,
+            "min_trials_per_subject": 1
+          },
+          "splits": {
+            "train": {
+              "num_trials": 74857,
+              "num_subjects": 447,
+              "trial_label_counts": {
+                "0": 42736,
+                "1": 32121
+              },
+              "subject_label_counts": {
+                "0": 198,
+                "1": 249
+              },
+              "task_counts": {
+                "1": 18764,
+                "3": 17301,
+                "2": 18690,
+                "0": 20102
+              },
+              "eye_pattern_counts": {
+                "LR": 61260,
+                "R": 4733,
+                "L": 8864
+              },
+              "source_suffix_counts": {
+                "D": 65724,
+                "R": 3204,
+                "L": 5929
+              }
+            },
+            "val": {
+              "num_trials": 26221,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 14885,
+                "1": 11336
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6492,
+                "3": 6237,
+                "2": 6723,
+                "0": 6769
+              },
+              "eye_pattern_counts": {
+                "LR": 21248,
+                "R": 2911,
+                "L": 2062
+              },
+              "source_suffix_counts": {
+                "D": 22589,
+                "L": 1065,
+                "R": 2567
+              }
+            },
+            "test": {
+              "num_trials": 24500,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 13642,
+                "1": 10858
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6114,
+                "3": 5723,
+                "2": 6265,
+                "0": 6398
+              },
+              "eye_pattern_counts": {
+                "LR": 20423,
+                "R": 1439,
+                "L": 2638
+              },
+              "source_suffix_counts": {
+                "D": 21360,
+                "L": 2013,
+                "R": 1127
+              }
+            }
+          },
+          "fold_index": 3,
+          "num_folds": 5
+        },
+        {
+          "disease": "PD相关",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 125578,
+            "num_subjects": 745,
+            "trial_label_counts": {
+              "0": 71263,
+              "1": 54315
+            },
+            "subject_label_counts": {
+              "0": 330,
+              "1": 415
+            },
+            "task_counts": {
+              "1": 31370,
+              "3": 29261,
+              "2": 31678,
+              "0": 33269
+            },
+            "group_counts": {
+              "患病": 54315,
+              "健康": 71263
+            },
+            "disease_counts": {
+              "PD相关": 125578
+            },
+            "eye_pattern_counts": {
+              "LR": 102931,
+              "R": 9083,
+              "L": 13564
+            },
+            "source_suffix_counts": {
+              "D": 109673,
+              "R": 6898,
+              "L": 9007
+            },
+            "max_trials_per_subject": 640,
+            "min_trials_per_subject": 1
+          },
+          "splits": {
+            "train": {
+              "num_trials": 74421,
+              "num_subjects": 447,
+              "trial_label_counts": {
+                "0": 41920,
+                "1": 32501
+              },
+              "subject_label_counts": {
+                "0": 198,
+                "1": 249
+              },
+              "task_counts": {
+                "1": 18644,
+                "3": 17240,
+                "2": 18864,
+                "0": 19673
+              },
+              "eye_pattern_counts": {
+                "LR": 61383,
+                "R": 4485,
+                "L": 8553
+              },
+              "source_suffix_counts": {
+                "D": 64926,
+                "R": 3319,
+                "L": 6176
+              }
+            },
+            "val": {
+              "num_trials": 24936,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 14458,
+                "1": 10478
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "0": 6827,
+                "1": 6234,
+                "2": 6091,
+                "3": 5784
+              },
+              "eye_pattern_counts": {
+                "LR": 20300,
+                "R": 1687,
+                "L": 2949
+              },
+              "source_suffix_counts": {
+                "D": 22158,
+                "R": 1012,
+                "L": 1766
+              }
+            },
+            "test": {
+              "num_trials": 26221,
+              "num_subjects": 149,
+              "trial_label_counts": {
+                "0": 14885,
+                "1": 11336
+              },
+              "subject_label_counts": {
+                "0": 66,
+                "1": 83
+              },
+              "task_counts": {
+                "1": 6492,
+                "3": 6237,
+                "2": 6723,
+                "0": 6769
+              },
+              "eye_pattern_counts": {
+                "LR": 21248,
+                "R": 2911,
+                "L": 2062
+              },
+              "source_suffix_counts": {
+                "D": 22589,
+                "L": 1065,
+                "R": 2567
+              }
+            }
+          },
+          "fold_index": 4,
+          "num_folds": 5
+        }
+      ]
+    },
+    "戒毒所": {
+      "overall": {
+        "num_trials": 18374,
+        "num_subjects": 124,
+        "trial_label_counts": {
+          "0": 7914,
+          "1": 10460
+        },
+        "subject_label_counts": {
+          "0": 55,
+          "1": 69
+        },
+        "task_counts": {
+          "1": 4428,
+          "3": 4540,
+          "2": 4757,
+          "0": 4649
+        },
+        "group_counts": {
+          "患病": 10460,
+          "健康": 7914
+        },
+        "disease_counts": {
+          "戒毒所": 18374
+        },
+        "eye_pattern_counts": {
+          "LR": 16778,
+          "L": 1101,
+          "R": 495
+        },
+        "source_suffix_counts": {
+          "D": 17672,
+          "R": 147,
+          "L": 555
+        },
+        "max_trials_per_subject": 317,
+        "min_trials_per_subject": 31
+      },
+      "folds": [
+        {
+          "disease": "戒毒所",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 18374,
+            "num_subjects": 124,
+            "trial_label_counts": {
+              "0": 7914,
+              "1": 10460
+            },
+            "subject_label_counts": {
+              "0": 55,
+              "1": 69
+            },
+            "task_counts": {
+              "1": 4428,
+              "3": 4540,
+              "2": 4757,
+              "0": 4649
+            },
+            "group_counts": {
+              "患病": 10460,
+              "健康": 7914
+            },
+            "disease_counts": {
+              "戒毒所": 18374
+            },
+            "eye_pattern_counts": {
+              "LR": 16778,
+              "L": 1101,
+              "R": 495
+            },
+            "source_suffix_counts": {
+              "D": 17672,
+              "R": 147,
+              "L": 555
+            },
+            "max_trials_per_subject": 317,
+            "min_trials_per_subject": 31
+          },
+          "splits": {
+            "train": {
+              "num_trials": 10843,
+              "num_subjects": 74,
+              "trial_label_counts": {
+                "0": 4664,
+                "1": 6179
+              },
+              "subject_label_counts": {
+                "0": 33,
+                "1": 41
+              },
+              "task_counts": {
+                "1": 2580,
+                "3": 2658,
+                "2": 2799,
+                "0": 2806
+              },
+              "eye_pattern_counts": {
+                "LR": 9740,
+                "L": 835,
+                "R": 268
+              },
+              "source_suffix_counts": {
+                "D": 10252,
+                "R": 67,
+                "L": 524
+              }
+            },
+            "val": {
+              "num_trials": 3883,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1672,
+                "1": 2211
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "1": 938,
+                "3": 984,
+                "2": 1002,
+                "0": 959
+              },
+              "eye_pattern_counts": {
+                "LR": 3539,
+                "L": 165,
+                "R": 179
+              },
+              "source_suffix_counts": {
+                "D": 3803,
+                "R": 80
+              }
+            },
+            "test": {
+              "num_trials": 3648,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1578,
+                "1": 2070
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "1": 910,
+                "3": 898,
+                "2": 956,
+                "0": 884
+              },
+              "eye_pattern_counts": {
+                "LR": 3499,
+                "R": 48,
+                "L": 101
+              },
+              "source_suffix_counts": {
+                "D": 3617,
+                "L": 31
+              }
+            }
+          },
+          "fold_index": 0,
+          "num_folds": 5
+        },
+        {
+          "disease": "戒毒所",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 18374,
+            "num_subjects": 124,
+            "trial_label_counts": {
+              "0": 7914,
+              "1": 10460
+            },
+            "subject_label_counts": {
+              "0": 55,
+              "1": 69
+            },
+            "task_counts": {
+              "1": 4428,
+              "3": 4540,
+              "2": 4757,
+              "0": 4649
+            },
+            "group_counts": {
+              "患病": 10460,
+              "健康": 7914
+            },
+            "disease_counts": {
+              "戒毒所": 18374
+            },
+            "eye_pattern_counts": {
+              "LR": 16778,
+              "L": 1101,
+              "R": 495
+            },
+            "source_suffix_counts": {
+              "D": 17672,
+              "R": 147,
+              "L": 555
+            },
+            "max_trials_per_subject": 317,
+            "min_trials_per_subject": 31
+          },
+          "splits": {
+            "train": {
+              "num_trials": 10987,
+              "num_subjects": 74,
+              "trial_label_counts": {
+                "0": 4685,
+                "1": 6302
+              },
+              "subject_label_counts": {
+                "0": 33,
+                "1": 41
+              },
+              "task_counts": {
+                "1": 2666,
+                "3": 2673,
+                "2": 2812,
+                "0": 2836
+              },
+              "eye_pattern_counts": {
+                "LR": 10106,
+                "L": 703,
+                "R": 178
+              },
+              "source_suffix_counts": {
+                "D": 10575,
+                "L": 412
+              }
+            },
+            "val": {
+              "num_trials": 3504,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1557,
+                "1": 1947
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "2": 943,
+                "1": 824,
+                "3": 883,
+                "0": 854
+              },
+              "eye_pattern_counts": {
+                "LR": 3133,
+                "L": 233,
+                "R": 138
+              },
+              "source_suffix_counts": {
+                "D": 3294,
+                "R": 67,
+                "L": 143
+              }
+            },
+            "test": {
+              "num_trials": 3883,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1672,
+                "1": 2211
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "1": 938,
+                "3": 984,
+                "2": 1002,
+                "0": 959
+              },
+              "eye_pattern_counts": {
+                "LR": 3539,
+                "L": 165,
+                "R": 179
+              },
+              "source_suffix_counts": {
+                "D": 3803,
+                "R": 80
+              }
+            }
+          },
+          "fold_index": 1,
+          "num_folds": 5
+        },
+        {
+          "disease": "戒毒所",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 18374,
+            "num_subjects": 124,
+            "trial_label_counts": {
+              "0": 7914,
+              "1": 10460
+            },
+            "subject_label_counts": {
+              "0": 55,
+              "1": 69
+            },
+            "task_counts": {
+              "1": 4428,
+              "3": 4540,
+              "2": 4757,
+              "0": 4649
+            },
+            "group_counts": {
+              "患病": 10460,
+              "健康": 7914
+            },
+            "disease_counts": {
+              "戒毒所": 18374
+            },
+            "eye_pattern_counts": {
+              "LR": 16778,
+              "L": 1101,
+              "R": 495
+            },
+            "source_suffix_counts": {
+              "D": 17672,
+              "R": 147,
+              "L": 555
+            },
+            "max_trials_per_subject": 317,
+            "min_trials_per_subject": 31
+          },
+          "splits": {
+            "train": {
+              "num_trials": 11119,
+              "num_subjects": 74,
+              "trial_label_counts": {
+                "0": 4746,
+                "1": 6373
+              },
+              "subject_label_counts": {
+                "0": 33,
+                "1": 41
+              },
+              "task_counts": {
+                "1": 2705,
+                "3": 2712,
+                "2": 2844,
+                "0": 2858
+              },
+              "eye_pattern_counts": {
+                "LR": 10157,
+                "L": 678,
+                "R": 284
+              },
+              "source_suffix_counts": {
+                "D": 10640,
+                "L": 399,
+                "R": 80
+              }
+            },
+            "val": {
+              "num_trials": 3751,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1611,
+                "1": 2140
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "1": 899,
+                "3": 945,
+                "2": 970,
+                "0": 937
+              },
+              "eye_pattern_counts": {
+                "LR": 3488,
+                "L": 190,
+                "R": 73
+              },
+              "source_suffix_counts": {
+                "D": 3738,
+                "L": 13
+              }
+            },
+            "test": {
+              "num_trials": 3504,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1557,
+                "1": 1947
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "2": 943,
+                "1": 824,
+                "3": 883,
+                "0": 854
+              },
+              "eye_pattern_counts": {
+                "LR": 3133,
+                "L": 233,
+                "R": 138
+              },
+              "source_suffix_counts": {
+                "D": 3294,
+                "R": 67,
+                "L": 143
+              }
+            }
+          },
+          "fold_index": 2,
+          "num_folds": 5
+        },
+        {
+          "disease": "戒毒所",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 18374,
+            "num_subjects": 124,
+            "trial_label_counts": {
+              "0": 7914,
+              "1": 10460
+            },
+            "subject_label_counts": {
+              "0": 55,
+              "1": 69
+            },
+            "task_counts": {
+              "1": 4428,
+              "3": 4540,
+              "2": 4757,
+              "0": 4649
+            },
+            "group_counts": {
+              "患病": 10460,
+              "健康": 7914
+            },
+            "disease_counts": {
+              "戒毒所": 18374
+            },
+            "eye_pattern_counts": {
+              "LR": 16778,
+              "L": 1101,
+              "R": 495
+            },
+            "source_suffix_counts": {
+              "D": 17672,
+              "R": 147,
+              "L": 555
+            },
+            "max_trials_per_subject": 317,
+            "min_trials_per_subject": 31
+          },
+          "splits": {
+            "train": {
+              "num_trials": 11035,
+              "num_subjects": 75,
+              "trial_label_counts": {
+                "0": 4807,
+                "1": 6228
+              },
+              "subject_label_counts": {
+                "0": 33,
+                "1": 42
+              },
+              "task_counts": {
+                "1": 2672,
+                "3": 2765,
+                "2": 2901,
+                "0": 2697
+              },
+              "eye_pattern_counts": {
+                "LR": 10171,
+                "L": 499,
+                "R": 365
+              },
+              "source_suffix_counts": {
+                "D": 10714,
+                "R": 147,
+                "L": 174
+              }
+            },
+            "val": {
+              "num_trials": 3588,
+              "num_subjects": 24,
+              "trial_label_counts": {
+                "0": 1496,
+                "1": 2092
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 13
+              },
+              "task_counts": {
+                "1": 857,
+                "3": 830,
+                "2": 886,
+                "0": 1015
+              },
+              "eye_pattern_counts": {
+                "LR": 3119,
+                "L": 412,
+                "R": 57
+              },
+              "source_suffix_counts": {
+                "D": 3220,
+                "L": 368
+              }
+            },
+            "test": {
+              "num_trials": 3751,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1611,
+                "1": 2140
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "1": 899,
+                "3": 945,
+                "2": 970,
+                "0": 937
+              },
+              "eye_pattern_counts": {
+                "LR": 3488,
+                "L": 190,
+                "R": 73
+              },
+              "source_suffix_counts": {
+                "D": 3738,
+                "L": 13
+              }
+            }
+          },
+          "fold_index": 3,
+          "num_folds": 5
+        },
+        {
+          "disease": "戒毒所",
+          "seed": 42,
+          "strategy": "subject_stratified_kfold",
+          "train_ratio": 0.6,
+          "val_ratio": 0.2,
+          "test_ratio": 0.2,
+          "overall": {
+            "num_trials": 18374,
+            "num_subjects": 124,
+            "trial_label_counts": {
+              "0": 7914,
+              "1": 10460
+            },
+            "subject_label_counts": {
+              "0": 55,
+              "1": 69
+            },
+            "task_counts": {
+              "1": 4428,
+              "3": 4540,
+              "2": 4757,
+              "0": 4649
+            },
+            "group_counts": {
+              "患病": 10460,
+              "健康": 7914
+            },
+            "disease_counts": {
+              "戒毒所": 18374
+            },
+            "eye_pattern_counts": {
+              "LR": 16778,
+              "L": 1101,
+              "R": 495
+            },
+            "source_suffix_counts": {
+              "D": 17672,
+              "R": 147,
+              "L": 555
+            },
+            "max_trials_per_subject": 317,
+            "min_trials_per_subject": 31
+          },
+          "splits": {
+            "train": {
+              "num_trials": 11138,
+              "num_subjects": 75,
+              "trial_label_counts": {
+                "0": 4840,
+                "1": 6298
+              },
+              "subject_label_counts": {
+                "0": 33,
+                "1": 42
+              },
+              "task_counts": {
+                "1": 2661,
+                "3": 2812,
+                "2": 2915,
+                "0": 2750
+              },
+              "eye_pattern_counts": {
+                "LR": 10160,
+                "L": 588,
+                "R": 390
+              },
+              "source_suffix_counts": {
+                "D": 10835,
+                "R": 147,
+                "L": 156
+              }
+            },
+            "val": {
+              "num_trials": 3648,
+              "num_subjects": 25,
+              "trial_label_counts": {
+                "0": 1578,
+                "1": 2070
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 14
+              },
+              "task_counts": {
+                "1": 910,
+                "3": 898,
+                "2": 956,
+                "0": 884
+              },
+              "eye_pattern_counts": {
+                "LR": 3499,
+                "R": 48,
+                "L": 101
+              },
+              "source_suffix_counts": {
+                "D": 3617,
+                "L": 31
+              }
+            },
+            "test": {
+              "num_trials": 3588,
+              "num_subjects": 24,
+              "trial_label_counts": {
+                "0": 1496,
+                "1": 2092
+              },
+              "subject_label_counts": {
+                "0": 11,
+                "1": 13
+              },
+              "task_counts": {
+                "1": 857,
+                "3": 830,
+                "2": 886,
+                "0": 1015
+              },
+              "eye_pattern_counts": {
+                "LR": 3119,
+                "L": 412,
+                "R": 57
+              },
+              "source_suffix_counts": {
+                "D": 3220,
+                "L": 368
+              }
+            }
+          },
+          "fold_index": 4,
+          "num_folds": 5
+        }
+      ]
+    }
+  }
+}

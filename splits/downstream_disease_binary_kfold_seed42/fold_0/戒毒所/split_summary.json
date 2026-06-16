@@ -1,0 +1,131 @@
+{
+  "disease": "戒毒所",
+  "seed": 42,
+  "strategy": "subject_stratified_kfold",
+  "train_ratio": 0.6,
+  "val_ratio": 0.2,
+  "test_ratio": 0.2,
+  "overall": {
+    "num_trials": 18374,
+    "num_subjects": 124,
+    "trial_label_counts": {
+      "0": 7914,
+      "1": 10460
+    },
+    "subject_label_counts": {
+      "0": 55,
+      "1": 69
+    },
+    "task_counts": {
+      "1": 4428,
+      "3": 4540,
+      "2": 4757,
+      "0": 4649
+    },
+    "group_counts": {
+      "患病": 10460,
+      "健康": 7914
+    },
+    "disease_counts": {
+      "戒毒所": 18374
+    },
+    "eye_pattern_counts": {
+      "LR": 16778,
+      "L": 1101,
+      "R": 495
+    },
+    "source_suffix_counts": {
+      "D": 17672,
+      "R": 147,
+      "L": 555
+    },
+    "max_trials_per_subject": 317,
+    "min_trials_per_subject": 31
+  },
+  "splits": {
+    "train": {
+      "num_trials": 10843,
+      "num_subjects": 74,
+      "trial_label_counts": {
+        "0": 4664,
+        "1": 6179
+      },
+      "subject_label_counts": {
+        "0": 33,
+        "1": 41
+      },
+      "task_counts": {
+        "1": 2580,
+        "3": 2658,
+        "2": 2799,
+        "0": 2806
+      },
+      "eye_pattern_counts": {
+        "LR": 9740,
+        "L": 835,
+        "R": 268
+      },
+      "source_suffix_counts": {
+        "D": 10252,
+        "R": 67,
+        "L": 524
+      }
+    },
+    "val": {
+      "num_trials": 3883,
+      "num_subjects": 25,
+      "trial_label_counts": {
+        "0": 1672,
+        "1": 2211
+      },
+      "subject_label_counts": {
+        "0": 11,
+        "1": 14
+      },
+      "task_counts": {
+        "1": 938,
+        "3": 984,
+        "2": 1002,
+        "0": 959
+      },
+      "eye_pattern_counts": {
+        "LR": 3539,
+        "L": 165,
+        "R": 179
+      },
+      "source_suffix_counts": {
+        "D": 3803,
+        "R": 80
+      }
+    },
+    "test": {
+      "num_trials": 3648,
+      "num_subjects": 25,
+      "trial_label_counts": {
+        "0": 1578,
+        "1": 2070
+      },
+      "subject_label_counts": {
+        "0": 11,
+        "1": 14
+      },
+      "task_counts": {
+        "1": 910,
+        "3": 898,
+        "2": 956,
+        "0": 884
+      },
+      "eye_pattern_counts": {
+        "LR": 3499,
+        "R": 48,
+        "L": 101
+      },
+      "source_suffix_counts": {
+        "D": 3617,
+        "L": 31
+      }
+    }
+  },
+  "fold_index": 0,
+  "num_folds": 5
+}

@@ -77,6 +77,46 @@ def _split_subjects(
     return out
 
 
+def _kfold_subject_buckets(
+    subject_to_label: dict[str, int],
+    *,
+    seed: int,
+    num_folds: int,
+) -> list[set[str]]:
+    if num_folds < 2:
+        raise ValueError("num_folds must be >= 2 for subject_stratified_kfold")
+    rng = random.Random(seed)
+    subjects_by_label: dict[int, list[str]] = defaultdict(list)
+    for subject, label in subject_to_label.items():
+        subjects_by_label[int(label)].append(subject)
+    folds = [set() for _ in range(num_folds)]
+    for label in sorted(subjects_by_label):
+        subjects = sorted(subjects_by_label[label])
+        rng.shuffle(subjects)
+        if len(subjects) < num_folds:
+            LOGGER.warning("label=%s has fewer subjects (%s) than num_folds=%s", label, len(subjects), num_folds)
+        for index, subject in enumerate(subjects):
+            folds[index % num_folds].add(subject)
+    return folds
+
+
+def _kfold_subject_splits(
+    subject_to_label: dict[str, int],
+    *,
+    seed: int,
+    num_folds: int,
+) -> list[dict[str, set[str]]]:
+    fold_buckets = _kfold_subject_buckets(subject_to_label, seed=seed, num_folds=num_folds)
+    all_subjects = set(subject_to_label)
+    out: list[dict[str, set[str]]] = []
+    for fold_index in range(num_folds):
+        test_subjects = set(fold_buckets[fold_index])
+        val_subjects = set(fold_buckets[(fold_index + 1) % num_folds])
+        train_subjects = all_subjects - test_subjects - val_subjects
+        out.append({"train": train_subjects, "val": val_subjects, "test": test_subjects})
+    return out
+
+
 def _split_summary(
     disease: str,
     records: list[TrialRecord],
@@ -86,17 +126,24 @@ def _split_summary(
     train_ratio: float,
     val_ratio: float,
     test_ratio: float,
+    strategy: str = "subject_stratified_by_label",
+    fold_index: int | None = None,
+    num_folds: int | None = None,
 ) -> dict[str, Any]:
     summary: dict[str, Any] = {
         "disease": disease,
         "seed": seed,
-        "strategy": "subject_stratified_by_label",
+        "strategy": strategy,
         "train_ratio": train_ratio,
         "val_ratio": val_ratio,
         "test_ratio": test_ratio,
         "overall": summarize_downstream_records(records),
         "splits": {},
     }
+    if fold_index is not None:
+        summary["fold_index"] = int(fold_index)
+    if num_folds is not None:
+        summary["num_folds"] = int(num_folds)
     subject_to_label = _subject_labels(records)
     for split_name, subjects in subject_splits.items():
         split_records = [record for record in records if record.base_subject_id in subjects]
@@ -117,7 +164,7 @@ def _split_summary(
     return summary
 
 
-def make_downstream_splits(
+def _make_downstream_holdout_splits(
     cfg: dict[str, Any],
     *,
     diseases: list[str] | None = None,
@@ -142,6 +189,7 @@ def make_downstream_splits(
     all_summary: dict[str, Any] = {
         "data_dir": str(data_dir),
         "out_dir": str(split_out),
+        "strategy": "subject_stratified_by_label",
         "diseases": {},
     }
     for disease in selected_diseases:
@@ -176,6 +224,103 @@ def make_downstream_splits(
     return all_summary
 
 
+def make_downstream_kfold_splits(
+    cfg: dict[str, Any],
+    *,
+    diseases: list[str] | None = None,
+    out_dir: str | Path | None = None,
+    seed: int | None = None,
+    num_folds: int | None = None,
+) -> dict[str, Any]:
+    split_cfg = cfg.get("downstream_split", {})
+    data_dir = Path(cfg["data"]["data_dir"])
+    split_out = Path(out_dir or split_cfg.get("out_dir", "splits/downstream_disease_binary_kfold_seed42"))
+    selected_diseases = diseases or split_cfg.get("diseases") or cfg.get("downstream", {}).get("diseases") or DEFAULT_DISEASES
+    split_seed = int(seed if seed is not None else split_cfg.get("seed", 42))
+    folds = int(num_folds if num_folds is not None else split_cfg.get("num_folds", 5))
+    all_records = scan_trial_records(data_dir, exclude_no_eye_keep=True)
+    all_summary: dict[str, Any] = {
+        "data_dir": str(data_dir),
+        "out_dir": str(split_out),
+        "strategy": "subject_stratified_kfold",
+        "seed": split_seed,
+        "num_folds": folds,
+        "diseases": {},
+    }
+    for disease in selected_diseases:
+        records = filter_downstream_records(all_records, disease)
+        if not records:
+            raise RuntimeError(f"No eligible downstream records for disease={disease}")
+        subject_to_label = _subject_labels(records)
+        fold_splits = _kfold_subject_splits(subject_to_label, seed=split_seed, num_folds=folds)
+        disease_summaries: list[dict[str, Any]] = []
+        for fold_index, subject_splits in enumerate(fold_splits):
+            fold_dir = split_out / f"fold_{fold_index}" / disease
+            for split_name, subjects in subject_splits.items():
+                split_rows = sorted(record.rel_path for record in records if record.base_subject_id in subjects)
+                _write_split(fold_dir / f"{split_name}.txt", split_rows)
+            summary = _split_summary(
+                disease,
+                records,
+                subject_splits,
+                seed=split_seed,
+                train_ratio=max(0, folds - 2) / float(folds),
+                val_ratio=1.0 / float(folds),
+                test_ratio=1.0 / float(folds),
+                strategy="subject_stratified_kfold",
+                fold_index=fold_index,
+                num_folds=folds,
+            )
+            write_json(fold_dir / "split_summary.json", summary)
+            disease_summaries.append(summary)
+            LOGGER.info(
+                "%s fold_%s: train=%s val=%s test=%s subjects",
+                disease,
+                fold_index,
+                len(subject_splits["train"]),
+                len(subject_splits["val"]),
+                len(subject_splits["test"]),
+            )
+        all_summary["diseases"][disease] = {"overall": summarize_downstream_records(records), "folds": disease_summaries}
+    write_json(split_out / "split_summary_all.json", all_summary)
+    return all_summary
+
+
+def make_downstream_splits(
+    cfg: dict[str, Any],
+    *,
+    diseases: list[str] | None = None,
+    out_dir: str | Path | None = None,
+    seed: int | None = None,
+    train_ratio: float | None = None,
+    val_ratio: float | None = None,
+    test_ratio: float | None = None,
+    strategy: str | None = None,
+    num_folds: int | None = None,
+) -> dict[str, Any]:
+    split_cfg = cfg.get("downstream_split", {})
+    split_strategy = strategy or split_cfg.get("strategy", "subject_stratified")
+    if split_strategy == "subject_stratified_kfold":
+        return make_downstream_kfold_splits(
+            cfg,
+            diseases=diseases,
+            out_dir=out_dir,
+            seed=seed,
+            num_folds=num_folds,
+        )
+    if split_strategy not in {"subject_stratified", "subject_stratified_by_label"}:
+        raise ValueError(f"Unknown downstream split strategy: {split_strategy}")
+    return _make_downstream_holdout_splits(
+        cfg,
+        diseases=diseases,
+        out_dir=out_dir,
+        seed=seed,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+        test_ratio=test_ratio,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
@@ -184,6 +329,8 @@ def main() -> None:
     parser.add_argument("--train_ratio", type=float, default=None)
     parser.add_argument("--val_ratio", type=float, default=None)
     parser.add_argument("--test_ratio", type=float, default=None)
+    parser.add_argument("--strategy", default=None)
+    parser.add_argument("--num_folds", type=int, default=None)
     parser.add_argument("--disease", action="append", default=None)
     args = parser.parse_args()
     setup_logging()
@@ -196,6 +343,8 @@ def main() -> None:
         train_ratio=args.train_ratio,
         val_ratio=args.val_ratio,
         test_ratio=args.test_ratio,
+        strategy=args.strategy,
+        num_folds=args.num_folds,
     )
     print(summary)
 

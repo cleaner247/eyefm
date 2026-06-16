@@ -1,0 +1,133 @@
+{
+  "disease": "PD相关",
+  "seed": 42,
+  "strategy": "subject_stratified_kfold",
+  "train_ratio": 0.6,
+  "val_ratio": 0.2,
+  "test_ratio": 0.2,
+  "overall": {
+    "num_trials": 125578,
+    "num_subjects": 745,
+    "trial_label_counts": {
+      "0": 71263,
+      "1": 54315
+    },
+    "subject_label_counts": {
+      "0": 330,
+      "1": 415
+    },
+    "task_counts": {
+      "1": 31370,
+      "3": 29261,
+      "2": 31678,
+      "0": 33269
+    },
+    "group_counts": {
+      "患病": 54315,
+      "健康": 71263
+    },
+    "disease_counts": {
+      "PD相关": 125578
+    },
+    "eye_pattern_counts": {
+      "LR": 102931,
+      "R": 9083,
+      "L": 13564
+    },
+    "source_suffix_counts": {
+      "D": 109673,
+      "R": 6898,
+      "L": 9007
+    },
+    "max_trials_per_subject": 640,
+    "min_trials_per_subject": 1
+  },
+  "splits": {
+    "train": {
+      "num_trials": 75163,
+      "num_subjects": 447,
+      "trial_label_counts": {
+        "0": 42979,
+        "1": 32184
+      },
+      "subject_label_counts": {
+        "0": 198,
+        "1": 249
+      },
+      "task_counts": {
+        "1": 18910,
+        "3": 17469,
+        "2": 18815,
+        "0": 19969
+      },
+      "eye_pattern_counts": {
+        "LR": 61585,
+        "R": 6453,
+        "L": 7125
+      },
+      "source_suffix_counts": {
+        "D": 66072,
+        "R": 4891,
+        "L": 4200
+      }
+    },
+    "val": {
+      "num_trials": 24500,
+      "num_subjects": 149,
+      "trial_label_counts": {
+        "0": 13642,
+        "1": 10858
+      },
+      "subject_label_counts": {
+        "0": 66,
+        "1": 83
+      },
+      "task_counts": {
+        "1": 6114,
+        "3": 5723,
+        "2": 6265,
+        "0": 6398
+      },
+      "eye_pattern_counts": {
+        "LR": 20423,
+        "R": 1439,
+        "L": 2638
+      },
+      "source_suffix_counts": {
+        "D": 21360,
+        "L": 2013,
+        "R": 1127
+      }
+    },
+    "test": {
+      "num_trials": 25915,
+      "num_subjects": 149,
+      "trial_label_counts": {
+        "0": 14642,
+        "1": 11273
+      },
+      "subject_label_counts": {
+        "0": 66,
+        "1": 83
+      },
+      "task_counts": {
+        "1": 6346,
+        "3": 6069,
+        "2": 6598,
+        "0": 6902
+      },
+      "eye_pattern_counts": {
+        "LR": 20923,
+        "R": 1191,
+        "L": 3801
+      },
+      "source_suffix_counts": {
+        "D": 22241,
+        "R": 880,
+        "L": 2794
+      }
+    }
+  },
+  "fold_index": 2,
+  "num_folds": 5
+}

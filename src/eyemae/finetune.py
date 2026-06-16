@@ -656,12 +656,22 @@ def main() -> None:
     parser.add_argument("--disease", default=None)
     parser.add_argument("--mode", default=None)
     parser.add_argument("--resume", default=None)
+    parser.add_argument("--split_dir", default=None)
+    parser.add_argument("--output_root", default=None)
+    parser.add_argument("--output_dir", default=None)
     parser.add_argument("--max_epochs", type=int, default=None)
     parser.add_argument("--max_train_batches", type=int, default=None)
     parser.add_argument("--max_eval_batches", type=int, default=None)
     args = parser.parse_args()
     setup_logging()
     cfg = load_downstream_config(args.config)
+    if args.split_dir is not None:
+        cfg.setdefault("downstream", {})["split_dir"] = args.split_dir
+    if args.output_root is not None:
+        cfg.setdefault("experiment", {})["output_root"] = args.output_root
+        cfg.setdefault("experiment", {})["output_dir"] = None
+    if args.output_dir is not None:
+        cfg.setdefault("experiment", {})["output_dir"] = args.output_dir
     disease = args.disease or cfg.get("downstream", {}).get("disease")
     mode = args.mode or cfg.get("downstream", {}).get("mode")
     if disease is None:

@@ -1,0 +1,17 @@
+base_config: disease_binary_base.yaml
+
+experiment:
+  name: downstream_disease_binary_kfold_seed42
+  output_root: outputs/downstream_disease_binary_kfold_seed42
+
+downstream:
+  diseases: ["PD相关", "戒毒所"]
+  split_dir: splits/downstream_disease_binary_kfold_seed42/fold_0
+
+downstream_split:
+  strategy: subject_stratified_kfold
+  out_dir: splits/downstream_disease_binary_kfold_seed42
+  diseases: ["PD相关", "戒毒所"]
+  num_folds: 5
+  seed: 42
+  group_by_base_subject_id: true

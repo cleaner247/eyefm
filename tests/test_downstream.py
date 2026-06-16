@@ -165,6 +165,32 @@ def test_downstream_splits_are_subject_stratified(tmp_path: Path) -> None:
             seen[subject] = split
 
 
+def test_downstream_kfold_splits_are_subject_stratified(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    _make_downstream_fixture(root, num_subjects_per_class=10)
+    cfg = _cfg(tmp_path, root)
+    cfg["downstream_split"].update({"strategy": "subject_stratified_kfold", "num_folds": 5})
+    summary = make_downstream_splits(cfg)
+    assert summary["strategy"] == "subject_stratified_kfold"
+    test_seen: dict[str, int] = {}
+    for fold_index in range(5):
+        split_dir = tmp_path / "splits" / f"fold_{fold_index}" / "MCI"
+        split_subjects: dict[str, set[str]] = {}
+        for split in ("train", "val", "test"):
+            split_summary = summary["diseases"]["MCI"]["folds"][fold_index]["splits"][split]
+            assert split_summary["subject_label_counts"]["0"] > 0
+            assert split_summary["subject_label_counts"]["1"] > 0
+            subjects = {Path(row).parts[1] for row in (split_dir / f"{split}.txt").read_text(encoding="utf-8").splitlines()}
+            split_subjects[split] = subjects
+        assert not split_subjects["train"] & split_subjects["val"]
+        assert not split_subjects["train"] & split_subjects["test"]
+        assert not split_subjects["val"] & split_subjects["test"]
+        for subject in split_subjects["test"]:
+            assert subject not in test_seen
+            test_seen[subject] = fold_index
+    assert len(test_seen) == 20
+
+
 def test_downstream_dataset_applies_manifest_final_keep(tmp_path: Path) -> None:
     root = tmp_path / "data"
     path = root / "trials" / "S001" / "ProSaccade" / "trial_0000.npz"
