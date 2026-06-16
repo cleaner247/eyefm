@@ -36,7 +36,14 @@ def preprocess_trial(trial: dict[str, Any], cfg: dict[str, Any], area_stats: dic
     fix_on = np.asarray(trial["fix_on"], dtype=np.float32)
     stim_raw = np.asarray(trial["stim"], dtype=np.float32)
     subject_id = str(trial["subject_id"])
-    availability = parse_subject_eye_availability(subject_id)
+    try:
+        availability = parse_subject_eye_availability(subject_id)
+    except ValueError:
+        if "left_eye_available" not in trial and "right_eye_available" not in trial:
+            raise
+        availability = {"left_available": True, "right_available": True, "suffix": "explicit"}
+    left_available = bool(trial.get("left_eye_available", availability["left_available"]))
+    right_available = bool(trial.get("right_eye_available", availability["right_available"]))
 
     x_clip = float(cfg["normalization"]["x_clip_deg"])
     y_clip = float(cfg["normalization"]["y_clip_deg"])
@@ -64,9 +71,9 @@ def preprocess_trial(trial: dict[str, Any], cfg: dict[str, Any], area_stats: dic
 
     for e, source in enumerate((left, right)):
         missing = source["label"] == label_missing
-        if e == 0 and not availability["left_available"]:
+        if e == 0 and not left_available:
             missing[:] = True
-        if e == 1 and not availability["right_available"]:
+        if e == 1 and not right_available:
             missing[:] = True
         blink = (source["label"] == label_blink) & (~missing)
         valid_area = (~missing) & (~blink) & (source["area"] > 0)

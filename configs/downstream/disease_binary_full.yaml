@@ -1,0 +1,10 @@
+base_config: disease_binary_base.yaml
+
+downstream:
+  mode: pretrained_full
+
+downstream_train:
+  lr: 2.0e-5
+  encoder_lr: 2.0e-5
+  head_lr: 1.0e-3
+  weight_decay: 0.01

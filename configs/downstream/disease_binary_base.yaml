@@ -1,0 +1,53 @@
+base_config: ../eyemae_cnn_512_12l.yaml
+
+experiment:
+  name: downstream_disease_binary_seed42
+  output_dir:
+  output_root: outputs/downstream_disease_binary_seed42
+
+downstream:
+  diseases: ["AD", "MCI", "PD相关", "偏头痛", "戒毒所", "癫痫"]
+  split_dir: splits/downstream_disease_binary_seed42
+  pretrained_checkpoint: outputs/eyemae_cnn_512_12l_patch20_stimtoken/checkpoint_best.pt
+  partial_last_n_layers: 4
+  pooling: eye_mean
+  head:
+    hidden_dim: 256
+    dropout: 0.2
+
+pretraining_exposure:
+  mode: all_unlabeled_or_unknown
+  pretrain_subject_manifest:
+
+downstream_split:
+  out_dir: splits/downstream_disease_binary_seed42
+  seed: 42
+  train_ratio: 0.70
+  val_ratio: 0.15
+  test_ratio: 0.15
+
+downstream_train:
+  seed: 42
+  precision: bf16
+  optimizer: adamw
+  lr: 1.0e-4
+  encoder_lr: 2.0e-5
+  head_lr: 1.0e-3
+  betas: [0.9, 0.95]
+  weight_decay: 0.01
+  grad_clip: 1.0
+  max_epochs: 100
+  early_stopping_patience: 10
+  batch_size: 64
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  log_every_steps: 50
+
+downstream_checkpoint:
+  monitor: val/subject/auroc
+  mode: max
+
+downstream_eval:
+  threshold: 0.5
+  evaluate_splits: ["train", "val", "test"]

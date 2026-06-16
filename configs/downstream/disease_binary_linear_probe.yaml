@@ -1,0 +1,10 @@
+base_config: disease_binary_base.yaml
+
+downstream:
+  mode: pretrained_linear_probe
+
+downstream_train:
+  lr: 1.0e-3
+  encoder_lr: 0.0
+  head_lr: 1.0e-3
+  weight_decay: 0.01

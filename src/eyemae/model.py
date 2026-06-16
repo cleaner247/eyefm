@@ -148,6 +148,41 @@ class EyeMAEModel(nn.Module):
         hidden_r = hidden_seq[:, 2::3]
         return torch.stack([hidden_l, hidden_r], dim=2)
 
+    def forward_features(
+        self,
+        content: torch.Tensor,
+        quality: torch.Tensor,
+        stim: torch.Tensor,
+        task_id: torch.Tensor,
+        pad_mask: torch.Tensor,
+        eye_token_valid: torch.Tensor,
+        mae_mask: torch.Tensor | None = None,
+    ) -> dict[str, torch.Tensor]:
+        if mae_mask is None:
+            mae_mask = torch.zeros(
+                content.shape[0],
+                content.shape[1],
+                2,
+                dtype=torch.bool,
+                device=content.device,
+            )
+        s_tokens, l_tokens, r_tokens = self.assemble_tokens(content, quality, stim, task_id, mae_mask)
+        seq = self.interleave_sequence(s_tokens, l_tokens, r_tokens)
+        seq_attn_pad_mask = build_sequence_attention_mask(pad_mask, eye_token_valid)
+        hidden = seq
+        for block in self.blocks:
+            hidden = block(hidden, seq_attn_pad_mask)
+        hidden = self.final_norm(hidden)
+        hidden = hidden.masked_fill(seq_attn_pad_mask[..., None], 0.0)
+        hidden_eye = self.extract_eye_hidden(hidden)
+        return {
+            "hidden_seq": hidden,
+            "hidden_eye": hidden_eye,
+            "seq_attn_pad_mask": seq_attn_pad_mask,
+            "seq": seq,
+            "eye_token_valid": eye_token_valid,
+        }
+
     def forward(
         self,
         content: torch.Tensor,
@@ -160,19 +195,12 @@ class EyeMAEModel(nn.Module):
         *,
         return_hidden: bool = False,
     ) -> dict[str, torch.Tensor]:
-        s_tokens, l_tokens, r_tokens = self.assemble_tokens(content, quality, stim, task_id, mae_mask)
-        seq = self.interleave_sequence(s_tokens, l_tokens, r_tokens)
-        seq_attn_pad_mask = build_sequence_attention_mask(pad_mask, eye_token_valid)
-        hidden = seq
-        for block in self.blocks:
-            hidden = block(hidden, seq_attn_pad_mask)
-        hidden = self.final_norm(hidden)
-        hidden = hidden.masked_fill(seq_attn_pad_mask[..., None], 0.0)
-        hidden_eye = self.extract_eye_hidden(hidden)
+        features = self.forward_features(content, quality, stim, task_id, pad_mask, eye_token_valid, mae_mask)
+        hidden_eye = features["hidden_eye"]
         pred = self.pred_head(hidden_eye).view(content.shape[0], content.shape[1], 2, self.patch, 4)
-        out = {"pred": pred, "seq_attn_pad_mask": seq_attn_pad_mask}
+        out = {"pred": pred, "seq_attn_pad_mask": features["seq_attn_pad_mask"]}
         if return_hidden:
-            out.update({"hidden_seq": hidden, "hidden_eye": hidden_eye, "seq": seq})
+            out.update({"hidden_seq": features["hidden_seq"], "hidden_eye": hidden_eye, "seq": features["seq"]})
         return out
 
 

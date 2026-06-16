@@ -1,0 +1,10 @@
+base_config: disease_binary_base.yaml
+
+downstream:
+  mode: scratch
+
+downstream_train:
+  lr: 1.0e-4
+  encoder_lr: 1.0e-4
+  head_lr: 1.0e-3
+  weight_decay: 0.05

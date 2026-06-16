@@ -8,7 +8,8 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Iterable
 
-from .utils import str_to_bool, task_name_to_id
+from .data import task_name_to_id
+from .utils import str_to_bool
 
 
 TASK_NAMES = {"ProSaccade", "AntiSaccade", "MemorySaccade", "DoubleSaccade"}

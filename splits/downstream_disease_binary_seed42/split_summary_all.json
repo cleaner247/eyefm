@@ -1,0 +1,789 @@
+{
+  "data_dir": "/mnt/disk_sde/data-260606/extracted/cd_no_cond2_structured_20260609",
+  "out_dir": "splits/downstream_disease_binary_seed42",
+  "diseases": {
+    "AD": {
+      "disease": "AD",
+      "seed": 42,
+      "strategy": "subject_stratified_by_label",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15,
+      "overall": {
+        "num_trials": 19750,
+        "num_subjects": 136,
+        "trial_label_counts": {
+          "0": 4833,
+          "1": 14917
+        },
+        "subject_label_counts": {
+          "0": 31,
+          "1": 105
+        },
+        "task_counts": {
+          "1": 4346,
+          "3": 4229,
+          "2": 3967,
+          "0": 7208
+        },
+        "group_counts": {
+          "患病": 14917,
+          "健康": 4833
+        },
+        "disease_counts": {
+          "AD": 19750
+        },
+        "eye_pattern_counts": {
+          "LR": 17015,
+          "R": 1289,
+          "L": 1446
+        },
+        "source_suffix_counts": {
+          "D": 18156,
+          "R": 909,
+          "L": 685
+        },
+        "max_trials_per_subject": 275,
+        "min_trials_per_subject": 26
+      },
+      "splits": {
+        "train": {
+          "num_trials": 14087,
+          "num_subjects": 96,
+          "trial_label_counts": {
+            "0": 3485,
+            "1": 10602
+          },
+          "subject_label_counts": {
+            "0": 22,
+            "1": 74
+          },
+          "task_counts": {
+            "1": 3185,
+            "3": 2996,
+            "2": 2870,
+            "0": 5036
+          },
+          "eye_pattern_counts": {
+            "LR": 12266,
+            "R": 885,
+            "L": 936
+          },
+          "source_suffix_counts": {
+            "D": 12983,
+            "R": 636,
+            "L": 468
+          }
+        },
+        "val": {
+          "num_trials": 3061,
+          "num_subjects": 21,
+          "trial_label_counts": {
+            "0": 746,
+            "1": 2315
+          },
+          "subject_label_counts": {
+            "0": 5,
+            "1": 16
+          },
+          "task_counts": {
+            "1": 630,
+            "3": 660,
+            "2": 613,
+            "0": 1158
+          },
+          "eye_pattern_counts": {
+            "R": 275,
+            "LR": 2500,
+            "L": 286
+          },
+          "source_suffix_counts": {
+            "R": 240,
+            "D": 2663,
+            "L": 158
+          }
+        },
+        "test": {
+          "num_trials": 2602,
+          "num_subjects": 19,
+          "trial_label_counts": {
+            "0": 602,
+            "1": 2000
+          },
+          "subject_label_counts": {
+            "0": 4,
+            "1": 15
+          },
+          "task_counts": {
+            "1": 531,
+            "3": 573,
+            "0": 1014,
+            "2": 484
+          },
+          "eye_pattern_counts": {
+            "LR": 2249,
+            "R": 129,
+            "L": 224
+          },
+          "source_suffix_counts": {
+            "D": 2510,
+            "R": 33,
+            "L": 59
+          }
+        }
+      }
+    },
+    "MCI": {
+      "disease": "MCI",
+      "seed": 42,
+      "strategy": "subject_stratified_by_label",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15,
+      "overall": {
+        "num_trials": 57333,
+        "num_subjects": 383,
+        "trial_label_counts": {
+          "0": 35065,
+          "1": 22268
+        },
+        "subject_label_counts": {
+          "0": 230,
+          "1": 153
+        },
+        "task_counts": {
+          "1": 13549,
+          "3": 13687,
+          "2": 15137,
+          "0": 14960
+        },
+        "group_counts": {
+          "患病": 22268,
+          "健康": 35065
+        },
+        "disease_counts": {
+          "MCI": 57333
+        },
+        "eye_pattern_counts": {
+          "LR": 48853,
+          "L": 5426,
+          "R": 3054
+        },
+        "source_suffix_counts": {
+          "D": 50535,
+          "L": 4247,
+          "R": 2551
+        },
+        "max_trials_per_subject": 239,
+        "min_trials_per_subject": 29
+      },
+      "splits": {
+        "train": {
+          "num_trials": 39990,
+          "num_subjects": 268,
+          "trial_label_counts": {
+            "0": 24425,
+            "1": 15565
+          },
+          "subject_label_counts": {
+            "0": 161,
+            "1": 107
+          },
+          "task_counts": {
+            "1": 9365,
+            "3": 9582,
+            "2": 10531,
+            "0": 10512
+          },
+          "eye_pattern_counts": {
+            "LR": 34572,
+            "L": 3502,
+            "R": 1916
+          },
+          "source_suffix_counts": {
+            "D": 35631,
+            "L": 2800,
+            "R": 1559
+          }
+        },
+        "val": {
+          "num_trials": 8581,
+          "num_subjects": 57,
+          "trial_label_counts": {
+            "0": 5283,
+            "1": 3298
+          },
+          "subject_label_counts": {
+            "0": 34,
+            "1": 23
+          },
+          "task_counts": {
+            "1": 2096,
+            "3": 2013,
+            "2": 2272,
+            "0": 2200
+          },
+          "eye_pattern_counts": {
+            "LR": 6853,
+            "R": 572,
+            "L": 1156
+          },
+          "source_suffix_counts": {
+            "D": 7269,
+            "R": 499,
+            "L": 813
+          }
+        },
+        "test": {
+          "num_trials": 8762,
+          "num_subjects": 58,
+          "trial_label_counts": {
+            "0": 5357,
+            "1": 3405
+          },
+          "subject_label_counts": {
+            "0": 35,
+            "1": 23
+          },
+          "task_counts": {
+            "1": 2088,
+            "3": 2092,
+            "2": 2334,
+            "0": 2248
+          },
+          "eye_pattern_counts": {
+            "LR": 7428,
+            "R": 566,
+            "L": 768
+          },
+          "source_suffix_counts": {
+            "D": 7635,
+            "R": 493,
+            "L": 634
+          }
+        }
+      }
+    },
+    "PD相关": {
+      "disease": "PD相关",
+      "seed": 42,
+      "strategy": "subject_stratified_by_label",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15,
+      "overall": {
+        "num_trials": 125578,
+        "num_subjects": 745,
+        "trial_label_counts": {
+          "0": 71263,
+          "1": 54315
+        },
+        "subject_label_counts": {
+          "0": 330,
+          "1": 415
+        },
+        "task_counts": {
+          "1": 31370,
+          "3": 29261,
+          "2": 31678,
+          "0": 33269
+        },
+        "group_counts": {
+          "患病": 54315,
+          "健康": 71263
+        },
+        "disease_counts": {
+          "PD相关": 125578
+        },
+        "eye_pattern_counts": {
+          "LR": 102931,
+          "R": 9083,
+          "L": 13564
+        },
+        "source_suffix_counts": {
+          "D": 109673,
+          "R": 6898,
+          "L": 9007
+        },
+        "max_trials_per_subject": 640,
+        "min_trials_per_subject": 1
+      },
+      "splits": {
+        "train": {
+          "num_trials": 87345,
+          "num_subjects": 521,
+          "trial_label_counts": {
+            "0": 49956,
+            "1": 37389
+          },
+          "subject_label_counts": {
+            "0": 231,
+            "1": 290
+          },
+          "task_counts": {
+            "1": 21736,
+            "3": 20184,
+            "2": 22061,
+            "0": 23364
+          },
+          "eye_pattern_counts": {
+            "LR": 70870,
+            "R": 6931,
+            "L": 9544
+          },
+          "source_suffix_counts": {
+            "D": 75358,
+            "R": 5399,
+            "L": 6588
+          }
+        },
+        "val": {
+          "num_trials": 19870,
+          "num_subjects": 112,
+          "trial_label_counts": {
+            "0": 11606,
+            "1": 8264
+          },
+          "subject_label_counts": {
+            "0": 50,
+            "1": 62
+          },
+          "task_counts": {
+            "1": 5083,
+            "3": 4695,
+            "2": 4955,
+            "0": 5137
+          },
+          "eye_pattern_counts": {
+            "LR": 16477,
+            "R": 983,
+            "L": 2410
+          },
+          "source_suffix_counts": {
+            "D": 17475,
+            "R": 733,
+            "L": 1662
+          }
+        },
+        "test": {
+          "num_trials": 18363,
+          "num_subjects": 112,
+          "trial_label_counts": {
+            "0": 9701,
+            "1": 8662
+          },
+          "subject_label_counts": {
+            "0": 49,
+            "1": 63
+          },
+          "task_counts": {
+            "1": 4551,
+            "3": 4382,
+            "2": 4662,
+            "0": 4768
+          },
+          "eye_pattern_counts": {
+            "LR": 15584,
+            "L": 1610,
+            "R": 1169
+          },
+          "source_suffix_counts": {
+            "D": 16840,
+            "R": 766,
+            "L": 757
+          }
+        }
+      }
+    },
+    "偏头痛": {
+      "disease": "偏头痛",
+      "seed": 42,
+      "strategy": "subject_stratified_by_label",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15,
+      "overall": {
+        "num_trials": 26525,
+        "num_subjects": 182,
+        "trial_label_counts": {
+          "0": 14712,
+          "1": 11813
+        },
+        "subject_label_counts": {
+          "0": 101,
+          "1": 81
+        },
+        "task_counts": {
+          "1": 6619,
+          "0": 6746,
+          "3": 6399,
+          "2": 6761
+        },
+        "group_counts": {
+          "患病": 11813,
+          "健康": 14712
+        },
+        "disease_counts": {
+          "偏头痛": 26525
+        },
+        "eye_pattern_counts": {
+          "L": 1970,
+          "LR": 23198,
+          "R": 1357
+        },
+        "source_suffix_counts": {
+          "D": 25193,
+          "R": 554,
+          "L": 778
+        },
+        "max_trials_per_subject": 316,
+        "min_trials_per_subject": 6
+      },
+      "splits": {
+        "train": {
+          "num_trials": 18623,
+          "num_subjects": 128,
+          "trial_label_counts": {
+            "0": 10299,
+            "1": 8324
+          },
+          "subject_label_counts": {
+            "0": 71,
+            "1": 57
+          },
+          "task_counts": {
+            "1": 4657,
+            "3": 4467,
+            "2": 4783,
+            "0": 4716
+          },
+          "eye_pattern_counts": {
+            "LR": 16154,
+            "L": 1487,
+            "R": 982
+          },
+          "source_suffix_counts": {
+            "D": 17607,
+            "L": 619,
+            "R": 397
+          }
+        },
+        "val": {
+          "num_trials": 3870,
+          "num_subjects": 27,
+          "trial_label_counts": {
+            "0": 2178,
+            "1": 1692
+          },
+          "subject_label_counts": {
+            "0": 15,
+            "1": 12
+          },
+          "task_counts": {
+            "1": 974,
+            "0": 1008,
+            "3": 931,
+            "2": 957
+          },
+          "eye_pattern_counts": {
+            "L": 199,
+            "LR": 3566,
+            "R": 105
+          },
+          "source_suffix_counts": {
+            "D": 3747,
+            "L": 123
+          }
+        },
+        "test": {
+          "num_trials": 4032,
+          "num_subjects": 27,
+          "trial_label_counts": {
+            "0": 2235,
+            "1": 1797
+          },
+          "subject_label_counts": {
+            "0": 15,
+            "1": 12
+          },
+          "task_counts": {
+            "1": 988,
+            "3": 1001,
+            "2": 1021,
+            "0": 1022
+          },
+          "eye_pattern_counts": {
+            "LR": 3478,
+            "R": 270,
+            "L": 284
+          },
+          "source_suffix_counts": {
+            "D": 3839,
+            "R": 157,
+            "L": 36
+          }
+        }
+      }
+    },
+    "戒毒所": {
+      "disease": "戒毒所",
+      "seed": 42,
+      "strategy": "subject_stratified_by_label",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15,
+      "overall": {
+        "num_trials": 18374,
+        "num_subjects": 124,
+        "trial_label_counts": {
+          "0": 7914,
+          "1": 10460
+        },
+        "subject_label_counts": {
+          "0": 55,
+          "1": 69
+        },
+        "task_counts": {
+          "1": 4428,
+          "3": 4540,
+          "2": 4757,
+          "0": 4649
+        },
+        "group_counts": {
+          "患病": 10460,
+          "健康": 7914
+        },
+        "disease_counts": {
+          "戒毒所": 18374
+        },
+        "eye_pattern_counts": {
+          "LR": 16778,
+          "L": 1101,
+          "R": 495
+        },
+        "source_suffix_counts": {
+          "D": 17672,
+          "R": 147,
+          "L": 555
+        },
+        "max_trials_per_subject": 317,
+        "min_trials_per_subject": 31
+      },
+      "splits": {
+        "train": {
+          "num_trials": 12758,
+          "num_subjects": 86,
+          "trial_label_counts": {
+            "0": 5362,
+            "1": 7396
+          },
+          "subject_label_counts": {
+            "0": 38,
+            "1": 48
+          },
+          "task_counts": {
+            "1": 3097,
+            "3": 3125,
+            "2": 3314,
+            "0": 3222
+          },
+          "eye_pattern_counts": {
+            "LR": 11497,
+            "L": 899,
+            "R": 362
+          },
+          "source_suffix_counts": {
+            "D": 12211,
+            "R": 67,
+            "L": 480
+          }
+        },
+        "val": {
+          "num_trials": 2538,
+          "num_subjects": 18,
+          "trial_label_counts": {
+            "0": 1180,
+            "1": 1358
+          },
+          "subject_label_counts": {
+            "0": 8,
+            "1": 10
+          },
+          "task_counts": {
+            "2": 658,
+            "3": 645,
+            "0": 652,
+            "1": 583
+          },
+          "eye_pattern_counts": {
+            "LR": 2400,
+            "L": 102,
+            "R": 36
+          },
+          "source_suffix_counts": {
+            "D": 2538
+          }
+        },
+        "test": {
+          "num_trials": 3078,
+          "num_subjects": 20,
+          "trial_label_counts": {
+            "0": 1372,
+            "1": 1706
+          },
+          "subject_label_counts": {
+            "0": 9,
+            "1": 11
+          },
+          "task_counts": {
+            "1": 748,
+            "3": 770,
+            "2": 785,
+            "0": 775
+          },
+          "eye_pattern_counts": {
+            "LR": 2881,
+            "R": 97,
+            "L": 100
+          },
+          "source_suffix_counts": {
+            "D": 2923,
+            "L": 75,
+            "R": 80
+          }
+        }
+      }
+    },
+    "癫痫": {
+      "disease": "癫痫",
+      "seed": 42,
+      "strategy": "subject_stratified_by_label",
+      "train_ratio": 0.7,
+      "val_ratio": 0.15,
+      "test_ratio": 0.15,
+      "overall": {
+        "num_trials": 123705,
+        "num_subjects": 810,
+        "trial_label_counts": {
+          "0": 55788,
+          "1": 67917
+        },
+        "subject_label_counts": {
+          "0": 369,
+          "1": 441
+        },
+        "task_counts": {
+          "1": 30706,
+          "3": 30378,
+          "2": 31231,
+          "0": 31390
+        },
+        "group_counts": {
+          "患病": 67917,
+          "健康": 55788
+        },
+        "disease_counts": {
+          "癫痫": 123705
+        },
+        "eye_pattern_counts": {
+          "R": 25373,
+          "LR": 91596,
+          "L": 6736
+        },
+        "source_suffix_counts": {
+          "R": 22361,
+          "D": 98415,
+          "L": 2929
+        },
+        "max_trials_per_subject": 456,
+        "min_trials_per_subject": 3
+      },
+      "splits": {
+        "train": {
+          "num_trials": 87163,
+          "num_subjects": 567,
+          "trial_label_counts": {
+            "0": 39278,
+            "1": 47885
+          },
+          "subject_label_counts": {
+            "0": 258,
+            "1": 309
+          },
+          "task_counts": {
+            "1": 21730,
+            "3": 21427,
+            "2": 21905,
+            "0": 22101
+          },
+          "eye_pattern_counts": {
+            "LR": 63433,
+            "R": 18856,
+            "L": 4874
+          },
+          "source_suffix_counts": {
+            "D": 68197,
+            "R": 16714,
+            "L": 2252
+          }
+        },
+        "val": {
+          "num_trials": 17891,
+          "num_subjects": 121,
+          "trial_label_counts": {
+            "0": 8045,
+            "1": 9846
+          },
+          "subject_label_counts": {
+            "0": 55,
+            "1": 66
+          },
+          "task_counts": {
+            "1": 4379,
+            "3": 4460,
+            "2": 4526,
+            "0": 4526
+          },
+          "eye_pattern_counts": {
+            "R": 3166,
+            "LR": 13567,
+            "L": 1158
+          },
+          "source_suffix_counts": {
+            "R": 2633,
+            "D": 14661,
+            "L": 597
+          }
+        },
+        "test": {
+          "num_trials": 18651,
+          "num_subjects": 122,
+          "trial_label_counts": {
+            "0": 8465,
+            "1": 10186
+          },
+          "subject_label_counts": {
+            "0": 56,
+            "1": 66
+          },
+          "task_counts": {
+            "1": 4597,
+            "3": 4491,
+            "2": 4800,
+            "0": 4763
+          },
+          "eye_pattern_counts": {
+            "LR": 14596,
+            "R": 3351,
+            "L": 704
+          },
+          "source_suffix_counts": {
+            "D": 15557,
+            "R": 3014,
+            "L": 80
+          }
+        }
+      }
+    }
+  }
+}

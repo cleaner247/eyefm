@@ -1,0 +1,130 @@
+{
+  "disease": "偏头痛",
+  "seed": 42,
+  "strategy": "subject_stratified_by_label",
+  "train_ratio": 0.7,
+  "val_ratio": 0.15,
+  "test_ratio": 0.15,
+  "overall": {
+    "num_trials": 26525,
+    "num_subjects": 182,
+    "trial_label_counts": {
+      "0": 14712,
+      "1": 11813
+    },
+    "subject_label_counts": {
+      "0": 101,
+      "1": 81
+    },
+    "task_counts": {
+      "1": 6619,
+      "0": 6746,
+      "3": 6399,
+      "2": 6761
+    },
+    "group_counts": {
+      "患病": 11813,
+      "健康": 14712
+    },
+    "disease_counts": {
+      "偏头痛": 26525
+    },
+    "eye_pattern_counts": {
+      "L": 1970,
+      "LR": 23198,
+      "R": 1357
+    },
+    "source_suffix_counts": {
+      "D": 25193,
+      "R": 554,
+      "L": 778
+    },
+    "max_trials_per_subject": 316,
+    "min_trials_per_subject": 6
+  },
+  "splits": {
+    "train": {
+      "num_trials": 18623,
+      "num_subjects": 128,
+      "trial_label_counts": {
+        "0": 10299,
+        "1": 8324
+      },
+      "subject_label_counts": {
+        "0": 71,
+        "1": 57
+      },
+      "task_counts": {
+        "1": 4657,
+        "3": 4467,
+        "2": 4783,
+        "0": 4716
+      },
+      "eye_pattern_counts": {
+        "LR": 16154,
+        "L": 1487,
+        "R": 982
+      },
+      "source_suffix_counts": {
+        "D": 17607,
+        "L": 619,
+        "R": 397
+      }
+    },
+    "val": {
+      "num_trials": 3870,
+      "num_subjects": 27,
+      "trial_label_counts": {
+        "0": 2178,
+        "1": 1692
+      },
+      "subject_label_counts": {
+        "0": 15,
+        "1": 12
+      },
+      "task_counts": {
+        "1": 974,
+        "0": 1008,
+        "3": 931,
+        "2": 957
+      },
+      "eye_pattern_counts": {
+        "L": 199,
+        "LR": 3566,
+        "R": 105
+      },
+      "source_suffix_counts": {
+        "D": 3747,
+        "L": 123
+      }
+    },
+    "test": {
+      "num_trials": 4032,
+      "num_subjects": 27,
+      "trial_label_counts": {
+        "0": 2235,
+        "1": 1797
+      },
+      "subject_label_counts": {
+        "0": 15,
+        "1": 12
+      },
+      "task_counts": {
+        "1": 988,
+        "3": 1001,
+        "2": 1021,
+        "0": 1022
+      },
+      "eye_pattern_counts": {
+        "LR": 3478,
+        "R": 270,
+        "L": 284
+      },
+      "source_suffix_counts": {
+        "D": 3839,
+        "R": 157,
+        "L": 36
+      }
+    }
+  }
+}

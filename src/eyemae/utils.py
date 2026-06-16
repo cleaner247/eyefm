@@ -28,6 +28,19 @@ def set_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
+def str_to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    text = str(value).strip().lower()
+    if text in {"1", "true", "t", "yes", "y", "是", "keep"}:
+        return True
+    if text in {"0", "false", "f", "no", "n", "否", "na", "nan", "none", ""}:
+        return False
+    raise ValueError(f"Cannot parse boolean value: {value!r}")
+
+
 def ensure_dir(path: str | Path) -> Path:
     p = Path(path)
     p.mkdir(parents=True, exist_ok=True)
