@@ -336,6 +336,15 @@ eyemae_kfold_summary_wait
 The watcher waits for all five fold sessions to finish, then runs the summary
 command below.
 
+Progress monitor session:
+
+```text
+eyemae_kfold_progress_monitor
+```
+
+The progress monitor writes training status every 5 minutes until all 40
+`metrics_final.json` files exist.
+
 Training logs:
 
 ```text
@@ -344,6 +353,7 @@ outputs/downstream_disease_binary_kfold_seed42/logs/fold_1.log
 outputs/downstream_disease_binary_kfold_seed42/logs/fold_2.log
 outputs/downstream_disease_binary_kfold_seed42/logs/fold_3.log
 outputs/downstream_disease_binary_kfold_seed42/logs/fold_4.log
+outputs/downstream_disease_binary_kfold_seed42/logs/progress_monitor.log
 outputs/downstream_disease_binary_kfold_seed42/logs/summary_wait.log
 ```
 
