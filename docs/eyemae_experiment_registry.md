@@ -327,6 +327,30 @@ eyemae_kfold_fold3 -> GPU 3 -> FOLD_LIST=3
 eyemae_kfold_fold4 -> GPU 4 -> FOLD_LIST=4
 ```
 
+Runtime interventions:
+
+```text
+2026-06-16 18:30 Asia/Shanghai:
+  fold_2/PD相关/pretrained_partial hit CUDA OOM on GPU 2 after
+  fold_2/PD相关/scratch and fold_2/PD相关/pretrained_linear_probe had already
+  produced metrics_final.json.
+
+  Cause observed by nvidia-smi:
+    physical GPU 2 was occupied by an external CUDA training process using
+    nearly the full 80 GB device memory.
+
+  Recovery:
+    restarted fold 2 with SKIP_EXISTING=1 so completed fold_2 results were
+    reused; set PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True; moved the
+    recovered fold_2 session to physical GPU 3. The recovery session name is
+    eyemae_kfold_fold2_recover.
+
+  Post-recovery check:
+    fold_2/PD相关/pretrained_partial progressed past epoch=0 step=1150 by
+    2026-06-16 18:43 without a new OOM. At that point GPU 3 was shared by
+    fold 3 and recovered fold 2.
+```
+
 Watcher session:
 
 ```text
@@ -397,6 +421,24 @@ Status:
 
 ```text
 In progress locally as of 2026-06-16.
+```
+
+Live recovery note:
+
+```text
+2026-06-16 18:30 Asia/Shanghai:
+  fold_2 completed PD相关/scratch and PD相关/pretrained_linear_probe, then
+  hit CUDA OOM when starting PD相关/pretrained_partial on GPU 2. At that
+  moment GPU 2 was occupied by a non-project Python process, so the failed
+  fold_2 tmux session exited before completing the remaining modes.
+
+2026-06-16 18:37 Asia/Shanghai:
+  fold_2 was restarted in tmux session eyemae_kfold_fold2_recover with
+  SKIP_EXISTING=1, MAKE_SPLITS=0, SUMMARIZE=0, FOLD_LIST=2, and
+  CUDA_VISIBLE_DEVICES=3. This skips already completed fold_2 outputs and
+  resumes from PD相关/pretrained_partial. The recovery appends to
+  outputs/downstream_disease_binary_kfold_seed42/logs/fold_2.log, so the
+  earlier OOM traceback in that file is a handled historical event.
 ```
 
 ## V2 Code Changes
