@@ -420,7 +420,14 @@ tail -n 40 outputs/downstream_disease_binary_kfold_seed42/logs/fold_0.log
 Status:
 
 ```text
-In progress locally as of 2026-06-16.
+Completed locally as of 2026-06-17 01:35 Asia/Shanghai.
+Final metrics count = 40 / 40.
+The watcher generated all expected summary files:
+  outputs/downstream_disease_binary_kfold_seed42/summary.csv
+  outputs/downstream_disease_binary_kfold_seed42/summary.json
+  outputs/downstream_disease_binary_kfold_seed42/summary_aggregate.csv
+  outputs/downstream_disease_binary_kfold_seed42/summary_aggregate.json
+The final recovered mode was fold_2/戒毒所/pretrained_full.
 ```
 
 Live recovery note:
@@ -666,6 +673,24 @@ Initial launch check:
   extra final count = 0 / 80
   fold_0..3 are running AD/scratch on GPU 0/1/2/4
   fold_4 is waiting for GPU 3 to become free
+  filtered error count = 0
+
+Update, 2026-06-17 01:14 Asia/Shanghai:
+  eyemae_kfold_extra_fold4_wait observed GPU 3 memory.used=17 MiB and started
+  fold_4/AD/scratch. This occurred during the V2 fold_2 transition from
+  戒毒所/pretrained_partial to 戒毒所/pretrained_full, so V2 fold_2 final full
+  and V3 fold_4/AD/scratch briefly shared GPU 3.
+
+Update, 2026-06-17 01:38 Asia/Shanghai:
+  V2 fold_2 finished without a new OOM, so the GPU 3 overlap ended.
+  Peak observed GPU 3 memory during overlap was about 64 GiB / 80 GiB.
+  V3 final count = 26 / 80.
+  Running V3 tasks at that point:
+    fold_0/MCI/pretrained_partial
+    fold_1/MCI/pretrained_full
+    fold_2/MCI/pretrained_partial
+    fold_3/MCI/pretrained_full
+    fold_4/AD/scratch
   filtered error count = 0
 ```
 
