@@ -482,6 +482,193 @@ Result:
 7 passed
 ```
 
+## V3 Extra-Disease 5-Fold Downstream
+
+Purpose:
+
+```text
+Extend the k-fold downstream robustness check to the remaining disease tasks:
+AD, MCI, 偏头痛, and 癫痫.
+```
+
+Config:
+
+```text
+configs/downstream/disease_binary_kfold_extra.yaml
+```
+
+Launchers/helpers:
+
+```text
+scripts/finetune_downstream_kfold.sh
+scripts/finetune_downstream_kfold_wait_gpu.sh
+scripts/wait_and_summarize_downstream_kfold.sh
+```
+
+Tracked split:
+
+```text
+splits/downstream_disease_binary_kfold_extra_seed42/
+```
+
+Local output:
+
+```text
+outputs/downstream_disease_binary_kfold_extra_seed42/
+```
+
+Diseases:
+
+```text
+AD
+MCI
+偏头痛
+癫痫
+```
+
+Modes:
+
+```text
+scratch
+pretrained_linear_probe
+pretrained_partial
+pretrained_full
+```
+
+Fold rule:
+
+```text
+strategy = subject_stratified_kfold
+num_folds = 5
+seed = 42
+group_by_base_subject_id = true
+
+For fold_i:
+  test = bucket_i
+  val = bucket_(i + 1 mod 5)
+  train = remaining 3 buckets
+```
+
+Generated subject counts:
+
+| Disease | Fold | Train Subjects | Val Subjects | Test Subjects |
+|---|---:|---:|---:|---:|
+| AD | 0 | 81 | 27 | 28 |
+| AD | 1 | 82 | 27 | 27 |
+| AD | 2 | 82 | 27 | 27 |
+| AD | 3 | 82 | 27 | 27 |
+| AD | 4 | 81 | 28 | 27 |
+| MCI | 0 | 229 | 77 | 77 |
+| MCI | 1 | 229 | 77 | 77 |
+| MCI | 2 | 230 | 76 | 77 |
+| MCI | 3 | 231 | 76 | 76 |
+| MCI | 4 | 230 | 77 | 76 |
+| 偏头痛 | 0 | 108 | 36 | 38 |
+| 偏头痛 | 1 | 110 | 36 | 36 |
+| 偏头痛 | 2 | 110 | 36 | 36 |
+| 偏头痛 | 3 | 110 | 36 | 36 |
+| 偏头痛 | 4 | 108 | 38 | 36 |
+| 癫痫 | 0 | 485 | 162 | 163 |
+| 癫痫 | 1 | 486 | 162 | 162 |
+| 癫痫 | 2 | 486 | 162 | 162 |
+| 癫痫 | 3 | 487 | 161 | 162 |
+| 癫痫 | 4 | 486 | 163 | 161 |
+
+Generate splits:
+
+```bash
+python -m eyemae.make_downstream_splits \
+  --config configs/downstream/disease_binary_kfold_extra.yaml \
+  --strategy subject_stratified_kfold \
+  --num_folds 5 \
+  --out_dir splits/downstream_disease_binary_kfold_extra_seed42 \
+  --disease AD \
+  --disease MCI \
+  --disease 偏头痛 \
+  --disease 癫痫
+```
+
+Run all folds sequentially:
+
+```bash
+bash scripts/finetune_downstream_kfold.sh
+```
+
+Run one fold:
+
+```bash
+FOLD_LIST=0 MAKE_SPLITS=0 SUMMARIZE=0 \
+  bash scripts/finetune_downstream_kfold.sh
+```
+
+Current local launch, started 2026-06-16 23:23 Asia/Shanghai:
+
+```text
+eyemae_kfold_extra_fold0 -> GPU 0 -> FOLD_LIST=0
+eyemae_kfold_extra_fold1 -> GPU 1 -> FOLD_LIST=1
+eyemae_kfold_extra_fold2 -> GPU 2 -> FOLD_LIST=2
+eyemae_kfold_extra_fold3 -> GPU 4 -> FOLD_LIST=3
+eyemae_kfold_extra_fold4_wait -> waits for GPU 3 memory.used < 2000 MiB, then runs FOLD_LIST=4
+```
+
+Watcher session:
+
+```text
+eyemae_kfold_extra_summary_wait
+```
+
+The watcher waits for `eyemae_kfold_extra_fold0..3` and
+`eyemae_kfold_extra_fold4_wait` to exit, then runs the summary command below.
+
+Training logs:
+
+```text
+outputs/downstream_disease_binary_kfold_extra_seed42/logs/fold_0.log
+outputs/downstream_disease_binary_kfold_extra_seed42/logs/fold_1.log
+outputs/downstream_disease_binary_kfold_extra_seed42/logs/fold_2.log
+outputs/downstream_disease_binary_kfold_extra_seed42/logs/fold_3.log
+outputs/downstream_disease_binary_kfold_extra_seed42/logs/fold_4.log
+outputs/downstream_disease_binary_kfold_extra_seed42/logs/summary_wait.log
+```
+
+Expected count:
+
+```text
+5 folds * 4 diseases * 4 modes = 80 metrics_final.json files
+```
+
+Manual summary:
+
+```bash
+python -m eyemae.summarize_downstream \
+  --output_root outputs/downstream_disease_binary_kfold_extra_seed42 \
+  --disease AD \
+  --disease MCI \
+  --disease 偏头痛 \
+  --disease 癫痫 \
+  --fold 0 --fold 1 --fold 2 --fold 3 --fold 4
+```
+
+Expected summaries:
+
+```text
+outputs/downstream_disease_binary_kfold_extra_seed42/summary.csv
+outputs/downstream_disease_binary_kfold_extra_seed42/summary.json
+outputs/downstream_disease_binary_kfold_extra_seed42/summary_aggregate.csv
+outputs/downstream_disease_binary_kfold_extra_seed42/summary_aggregate.json
+```
+
+Status:
+
+```text
+In progress locally as of 2026-06-16 23:25 Asia/Shanghai.
+Initial launch check:
+  extra final count = 0 / 80
+  fold_0..3 are running AD/scratch on GPU 0/1/2/4
+  fold_4 is waiting for GPU 3 to become free
+  filtered error count = 0
+```
+
 ## Future Run Recording Rule
 
 For every new training or evaluation version, add an entry here with:
