@@ -57,6 +57,11 @@ def validate_config(cfg: dict[str, Any], *, require_splits: bool = True) -> None
         "patch.stride",
         "attention.min_nonmissing_frac_for_eye_token",
         "mask.min_nonmissing_frac_for_mae",
+        "loss.loss_only_on_mae_mask",
+        "loss.ignore_missing_for_all_losses",
+        "loss.ignore_blink_for_xy_area_loss",
+        "loss.velocity_within_patch_only",
+        "loss.no_loss_on_stim_tokens",
         "model.sequence_format",
         "model.pretrain_style",
         "model.use_cls",
@@ -116,6 +121,19 @@ def validate_config(cfg: dict[str, Any], *, require_splits: bool = True) -> None
         raise ValueError("model.use_stim_tokens must be true")
     if bool(cfg["model"]["broadcast_stim_to_eye"]):
         raise ValueError("model.broadcast_stim_to_eye must be false")
+
+    for field in (
+        "loss.loss_only_on_mae_mask",
+        "loss.ignore_missing_for_all_losses",
+        "loss.ignore_blink_for_xy_area_loss",
+        "loss.velocity_within_patch_only",
+        "loss.no_loss_on_stim_tokens",
+    ):
+        value = _require(cfg, field)
+        if not isinstance(value, bool):
+            raise ValueError(f"{field} must be boolean")
+    if not bool(cfg["loss"]["no_loss_on_stim_tokens"]):
+        raise ValueError("loss.no_loss_on_stim_tokens=false is unsupported because the current head predicts eye tokens only")
 
     for field in ("attention.min_nonmissing_frac_for_eye_token", "mask.min_nonmissing_frac_for_mae"):
         value = float(_require(cfg, field))

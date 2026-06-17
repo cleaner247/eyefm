@@ -1098,9 +1098,13 @@ train:
 
 ```python
 seq_len_i = 3 * N_i
-sum(seq_len_i for trial_i in batch) <= max_seq_tokens_per_gpu
+Nmax = max(N_i for trial_i in batch)
+3 * Nmax * len(batch) <= max_seq_tokens_per_gpu
 len(batch) <= max_trials_per_gpu
 ```
+
+也就是说 token budget 按 batch padding 后真正送入 Transformer 的 S/L/R token 数控制。
+`bucket_by_length: true` 时先在随机窗口内按 trial 长度排序，再组 batch，以减少 padding 浪费。
 
 debug 可以使用固定小batch：
 
@@ -1768,7 +1772,7 @@ model:
   norm: rmsnorm
   activation: swiglu
 
-  max_patches: 256
+  max_patches: 384
   pretrain_style: bert_masked_reconstruction
   use_cls: false
   use_token_type_embedding: true
@@ -2335,6 +2339,7 @@ train DataLoader 使用 DistributedSampler 或兼容的rank-aware token batch sa
 如果使用 DistributedSampler，每个epoch调用 sampler.set_epoch(epoch)。
 只有 rank0 写 TensorBoard、保存checkpoint、保存可视化。
 validation metrics 跨rank all_reduce。
+训练期 validation 同时保存整体 metrics 和 group metrics。
 ```
 
 precision：
@@ -2461,7 +2466,30 @@ evaluate 必须：
 使用相同area_stats
 使用相同mask策略或固定eval mask seed
 输出metrics.json
+输出metrics_by_group.json
 可选保存visualization
+```
+
+训练期 validation 也使用同一套分组口径：
+
+```text
+task_id
+eye
+trial_length
+missing_fraction
+subject_eye_availability
+eye_token_valid_fraction
+mask_type
+```
+
+训练期 visualization 从整个 validation pass 中选择代表性样本，而不是只保存第一个batch：
+
+```text
+各task样本
+long_span mask样本
+单眼可用subject样本
+all-missing eye token但stim_on存在的样本
+随机reservoir样本
 ```
 
 eval mask 建议：
@@ -2572,7 +2600,7 @@ model:
   dropout: 0.1
   norm: rmsnorm
   activation: swiglu
-  max_patches: 256
+  max_patches: 384
 
   use_cls: false
   use_token_type_embedding: true
@@ -2749,7 +2777,7 @@ model:
   dropout: 0.1
   norm: rmsnorm
   activation: swiglu
-  max_patches: 256
+  max_patches: 384
 
   use_cls: false
   use_token_type_embedding: true

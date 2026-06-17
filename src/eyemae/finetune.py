@@ -91,7 +91,7 @@ def count_parameters(model: nn.Module) -> dict[str, int]:
 
 
 def load_pretrained_encoder(model: DownstreamClassifier, checkpoint_path: str | Path) -> dict[str, Any]:
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state, skipped = extract_encoder_state_dict(checkpoint)
     missing, unexpected = model.encoder.load_state_dict(state, strict=False)
     allowed_missing = {key for key in model.encoder.state_dict() if key.startswith("pred_head.")}
@@ -487,7 +487,7 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
     best_epoch = -1
     start_epoch = 0
     if resume is not None:
-        resume_checkpoint = torch.load(resume, map_location=device)
+        resume_checkpoint = torch.load(resume, map_location=device, weights_only=False)
         model.load_state_dict(resume_checkpoint["model"])
         if "optimizer" in resume_checkpoint:
             optimizer.load_state_dict(resume_checkpoint["optimizer"])
@@ -626,7 +626,7 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
                 break
         best_path = out_dir / "checkpoint_best.pt"
         if best_path.exists():
-            checkpoint = torch.load(best_path, map_location="cpu")
+            checkpoint = torch.load(best_path, map_location="cpu", weights_only=False)
             model.load_state_dict(checkpoint["model"])
         final_metrics: dict[str, Any] = {"best_epoch": best_epoch, "best_metric": best_metric}
         for split in cfg["downstream_eval"].get("evaluate_splits", ["train", "val", "test"]):

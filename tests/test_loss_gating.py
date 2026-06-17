@@ -35,3 +35,32 @@ def test_denominator_zero_is_not_nan() -> None:
     loss, stats = compute_reconstruction_loss(pred, target, quality, mae_mask, pad_mask, eye_valid, cfg)
     assert loss.item() == 0.0
     assert stats["total_denominator"].item() == 0.0
+
+
+def test_loss_only_on_mae_mask_switch_can_include_unmasked_tokens() -> None:
+    cfg = load_config("configs/debug.yaml")
+    cfg["loss"]["loss_only_on_mae_mask"] = False
+    pred = torch.ones(1, 1, 2, 20, 4)
+    target = torch.zeros_like(pred)
+    quality = torch.zeros(1, 1, 2, 20, 1)
+    mae_mask = torch.zeros(1, 1, 2, dtype=torch.bool)
+    pad_mask = torch.zeros(1, 1, dtype=torch.bool)
+    eye_valid = torch.ones(1, 1, 2, dtype=torch.bool)
+    loss, stats = compute_reconstruction_loss(pred, target, quality, mae_mask, pad_mask, eye_valid, cfg)
+    assert torch.isfinite(loss)
+    assert stats["xy_denominator"] > 0
+
+
+def test_ignore_blink_switch_can_include_blink_coordinates() -> None:
+    cfg = load_config("configs/debug.yaml")
+    cfg["loss"]["ignore_blink_for_xy_area_loss"] = False
+    pred = torch.ones(1, 1, 2, 20, 4)
+    target = torch.zeros_like(pred)
+    target[:, :, :, :, 3] = 1.0
+    quality = torch.zeros(1, 1, 2, 20, 1)
+    mae_mask = torch.ones(1, 1, 2, dtype=torch.bool)
+    pad_mask = torch.zeros(1, 1, dtype=torch.bool)
+    eye_valid = torch.ones(1, 1, 2, dtype=torch.bool)
+    loss, stats = compute_reconstruction_loss(pred, target, quality, mae_mask, pad_mask, eye_valid, cfg)
+    assert torch.isfinite(loss)
+    assert stats["xy_denominator"] > 0

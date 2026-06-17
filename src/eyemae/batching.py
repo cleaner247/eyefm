@@ -42,6 +42,9 @@ class TokenBatchSampler(Sampler[list[int]]):
     def _seq_tokens(self, idx: int) -> int:
         return 3 * max(1, int(self.dataset.get_num_patches(idx)))
 
+    def _padded_seq_tokens(self, batch_len: int, max_patches: int) -> int:
+        return 3 * max(1, int(max_patches)) * max(1, int(batch_len))
+
     def _ordered_indices(self, epoch: int) -> list[int]:
         indices = list(range(len(self.dataset)))
         rng = random.Random(self.seed + int(epoch))
@@ -62,18 +65,21 @@ class TokenBatchSampler(Sampler[list[int]]):
     def _make_batches(self, epoch: int) -> list[list[int]]:
         batches: list[list[int]] = []
         batch: list[int] = []
-        tokens = 0
+        max_patches = 0
         for idx in self._ordered_indices(epoch):
-            seq_tokens = self._seq_tokens(idx)
+            patches = max(1, int(self.dataset.get_num_patches(idx)))
+            next_max_patches = max(max_patches, patches)
+            next_tokens = self._padded_seq_tokens(len(batch) + 1, next_max_patches)
             would_overflow = batch and (
-                len(batch) >= self.max_trials or tokens + seq_tokens > self.max_seq_tokens
+                len(batch) >= self.max_trials or next_tokens > self.max_seq_tokens
             )
             if would_overflow:
                 batches.append(batch)
                 batch = []
-                tokens = 0
+                max_patches = 0
+                next_max_patches = patches
             batch.append(idx)
-            tokens += seq_tokens
+            max_patches = next_max_patches
         if batch and not self.drop_last:
             batches.append(batch)
         return batches

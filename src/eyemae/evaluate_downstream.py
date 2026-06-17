@@ -34,7 +34,7 @@ def evaluate_downstream_checkpoint(
     datasets = make_datasets(cfg, disease)
     loaders = {split: make_downstream_loader(datasets[split], cfg, train=False) for split in datasets}
     model = DownstreamClassifier(cfg).to(device)
-    checkpoint = torch.load(checkpoint_path, map_location="cpu")
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model.load_state_dict(checkpoint["model"])
     pos_weight = train_subject_pos_weight(datasets["train"], device)
     out_dir = ensure_dir(output_dir)

@@ -17,7 +17,7 @@ class FakeLengthDataset:
 
 
 def _tokens(dataset: FakeLengthDataset, batch: list[int]) -> int:
-    return sum(3 * dataset.get_num_patches(i) for i in batch)
+    return 3 * max(dataset.get_num_patches(i) for i in batch) * len(batch)
 
 
 def test_token_batch_sampler_respects_token_and_trial_limits() -> None:
@@ -74,3 +74,15 @@ def test_token_batch_sampler_infinite_ddp_ranks_do_not_exhaust() -> None:
         for batch in batches:
             assert len(batch) <= 2
             assert _tokens(dataset, batch) <= 30
+
+
+def test_token_batch_sampler_budget_counts_padding() -> None:
+    dataset = FakeLengthDataset([1, 10, 1])
+    sampler = TokenBatchSampler(
+        dataset,
+        max_seq_tokens=36,
+        max_trials=10,
+        shuffle=False,
+        bucket_by_length=False,
+    )
+    assert list(sampler) == [[0], [1], [2]]

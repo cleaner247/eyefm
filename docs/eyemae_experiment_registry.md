@@ -746,6 +746,72 @@ Final 5-fold aggregate results, subject-level test metrics:
 | 癫痫 | pretrained_partial | 5 | 0.8560 +- 0.0213 | 0.7692 +- 0.0389 | 0.7604 |
 | 癫痫 | scratch | 5 | 0.7947 +- 0.0342 | 0.7343 +- 0.0383 | 0.7234 |
 
+## V2+V3 Combined 5-Fold Summary
+
+Purpose:
+
+```text
+Provide one final local summary across all six downstream binary tasks.
+
+The original k-fold outputs are intentionally kept in two roots:
+  outputs/downstream_disease_binary_kfold_seed42
+    PD相关, 戒毒所
+  outputs/downstream_disease_binary_kfold_extra_seed42
+    AD, MCI, 偏头痛, 癫痫
+```
+
+Combined local output:
+
+```text
+outputs/downstream_disease_binary_kfold_all_seed42/summary.csv
+outputs/downstream_disease_binary_kfold_all_seed42/summary.json
+outputs/downstream_disease_binary_kfold_all_seed42/summary_aggregate.csv
+outputs/downstream_disease_binary_kfold_all_seed42/summary_aggregate.json
+outputs/downstream_disease_binary_kfold_all_seed42/summary_aggregate_subject_test_compact.csv
+outputs/downstream_disease_binary_kfold_all_seed42/summary_aggregate_subject_test_compact.json
+```
+
+Status:
+
+```text
+Generated locally on 2026-06-17 14:44 Asia/Shanghai.
+summary.csv rows = 120
+summary_aggregate.csv rows = 24
+summary_aggregate_subject_test_compact.csv rows = 24
+All aggregate rows have n = 5.
+Diseases included: AD, MCI, PD相关, 偏头痛, 戒毒所, 癫痫.
+Modes included: scratch, pretrained_linear_probe, pretrained_partial, pretrained_full.
+```
+
+Final combined 5-fold aggregate results, subject-level test metrics:
+
+| Disease | Mode | n | AUROC mean+-std | F1 mean+-std | Accuracy mean |
+|---|---|---:|---:|---:|---:|
+| PD相关 | pretrained_full | 5 | 0.9664 +- 0.0136 | 0.9062 +- 0.0272 | 0.8993 |
+| PD相关 | pretrained_linear_probe | 5 | 0.9342 +- 0.0180 | 0.8615 +- 0.0210 | 0.8564 |
+| PD相关 | pretrained_partial | 5 | 0.9629 +- 0.0160 | 0.9072 +- 0.0204 | 0.8993 |
+| PD相关 | scratch | 5 | 0.9321 +- 0.0184 | 0.8698 +- 0.0174 | 0.8550 |
+| 戒毒所 | pretrained_full | 5 | 0.9193 +- 0.0433 | 0.8550 +- 0.0798 | 0.8233 |
+| 戒毒所 | pretrained_linear_probe | 5 | 0.8745 +- 0.0877 | 0.8167 +- 0.0893 | 0.7823 |
+| 戒毒所 | pretrained_partial | 5 | 0.9062 +- 0.0459 | 0.8315 +- 0.0410 | 0.8070 |
+| 戒毒所 | scratch | 5 | 0.7979 +- 0.1122 | 0.7497 +- 0.0842 | 0.7177 |
+| AD | pretrained_full | 5 | 0.8531 +- 0.0904 | 0.8941 +- 0.0467 | 0.8312 |
+| AD | pretrained_linear_probe | 5 | 0.8247 +- 0.1039 | 0.8747 +- 0.0337 | 0.8159 |
+| AD | pretrained_partial | 5 | 0.8619 +- 0.0775 | 0.8839 +- 0.0596 | 0.8233 |
+| AD | scratch | 5 | 0.7574 +- 0.1110 | 0.8005 +- 0.0543 | 0.7201 |
+| MCI | pretrained_full | 5 | 0.7898 +- 0.0399 | 0.6357 +- 0.0803 | 0.7076 |
+| MCI | pretrained_linear_probe | 5 | 0.7225 +- 0.0300 | 0.5687 +- 0.1624 | 0.6868 |
+| MCI | pretrained_partial | 5 | 0.7526 +- 0.0504 | 0.5590 +- 0.1349 | 0.6970 |
+| MCI | scratch | 5 | 0.7200 +- 0.0357 | 0.5926 +- 0.0556 | 0.6998 |
+| 偏头痛 | pretrained_full | 5 | 0.7969 +- 0.0454 | 0.7371 +- 0.0435 | 0.7690 |
+| 偏头痛 | pretrained_linear_probe | 5 | 0.7725 +- 0.0229 | 0.6991 +- 0.0507 | 0.7254 |
+| 偏头痛 | pretrained_partial | 5 | 0.7522 +- 0.0287 | 0.5526 +- 0.1455 | 0.6646 |
+| 偏头痛 | scratch | 5 | 0.7397 +- 0.0862 | 0.5914 +- 0.0827 | 0.6602 |
+| 癫痫 | pretrained_full | 5 | 0.8576 +- 0.0194 | 0.7967 +- 0.0281 | 0.7777 |
+| 癫痫 | pretrained_linear_probe | 5 | 0.8374 +- 0.0233 | 0.7624 +- 0.0267 | 0.7568 |
+| 癫痫 | pretrained_partial | 5 | 0.8560 +- 0.0213 | 0.7692 +- 0.0389 | 0.7604 |
+| 癫痫 | scratch | 5 | 0.7947 +- 0.0342 | 0.7343 +- 0.0383 | 0.7234 |
+
 ## Future Run Recording Rule
 
 For every new training or evaluation version, add an entry here with:

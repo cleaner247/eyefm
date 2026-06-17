@@ -4,10 +4,12 @@ import argparse
 import logging
 import math
 import os
+import random
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader, DistributedSampler
@@ -15,6 +17,14 @@ from torch.utils.data import DataLoader, DistributedSampler
 from .batching import TokenBatchSampler
 from .config import load_config, split_path_for_name, validate_config
 from .data import TrialDataset, collate_trials
+from .eval_artifacts import (
+    VizCollector,
+    finalize_group_metrics,
+    flatten_group_metrics,
+    new_group_metric_sums,
+    reduce_group_metric_sums,
+    update_group_metrics,
+)
 from .losses import compute_reconstruction_loss
 from .masking import generate_mae_mask
 from .metrics import finalize_metric_sums, new_metric_sums, reduce_metric_sums, update_metric_sums
@@ -104,13 +114,12 @@ def make_loader(
     if train and cfg["train"].get("batch_trials_per_gpu") is None and cfg["train"].get("max_seq_tokens_per_gpu") is not None:
         max_seq_tokens = int(cfg["train"]["max_seq_tokens_per_gpu"])
         configured_max_trials = int(cfg["train"]["max_trials_per_gpu"])
-        max_patches = int(cfg["model"]["max_patches"])
-        max_trials = min(configured_max_trials, max(64, max_seq_tokens // max(1, 3 * max_patches)))
-        if rank == 0 and max_trials < configured_max_trials:
+        max_trials = configured_max_trials
+        if rank == 0:
             LOGGER.info(
-                "Using effective max_trials_per_gpu=%s below configured upper bound=%s for bucketed dynamic batches",
+                "Using token-based dynamic batches: max_seq_tokens_per_gpu=%s max_trials_per_gpu=%s",
+                max_seq_tokens,
                 max_trials,
-                configured_max_trials,
             )
         sampler = TokenBatchSampler(
             dataset,
@@ -152,6 +161,8 @@ def save_checkpoint(
         "area_stats_path": cfg["area"]["stats_path"],
         "best_metric": float(best_metric),
         "rng_states": {
+            "python": random.getstate(),
+            "numpy": np.random.get_state(),
             "torch": torch.get_rng_state(),
             "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else [],
         },
@@ -160,11 +171,20 @@ def save_checkpoint(
 
 
 def load_checkpoint(path: str | Path, model: torch.nn.Module, optimizer: torch.optim.Optimizer | None = None) -> tuple[int, int, float]:
-    checkpoint = torch.load(path, map_location="cpu")
+    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
     raw_model = model.module if isinstance(model, DistributedDataParallel) else model
     raw_model.load_state_dict(checkpoint["model"])
     if optimizer is not None and "optimizer" in checkpoint:
         optimizer.load_state_dict(checkpoint["optimizer"])
+    rng_states = checkpoint.get("rng_states") or {}
+    if "python" in rng_states:
+        random.setstate(rng_states["python"])
+    if "numpy" in rng_states:
+        np.random.set_state(rng_states["numpy"])
+    if "torch" in rng_states:
+        torch.set_rng_state(rng_states["torch"])
+    if torch.cuda.is_available() and rng_states.get("cuda"):
+        torch.cuda.set_rng_state_all(rng_states["cuda"])
     return int(checkpoint.get("global_step", 0)), int(checkpoint.get("epoch", 0)), float(checkpoint.get("best_metric", math.inf))
 
 
@@ -181,14 +201,16 @@ def validate(
 ) -> dict[str, float]:
     model.eval()
     sums = new_metric_sums(device)
+    group_sums = new_group_metric_sums(device)
     generator = torch.Generator(device=device)
-    generator.manual_seed(int(cfg["eval"]["seed"]) + int(global_step))
-    first_batch = None
-    first_pred = None
-    first_mask = None
+    eval_seed = int(cfg["eval"]["seed"])
+    if not bool(cfg["eval"].get("fixed_mask", True)):
+        eval_seed += int(global_step)
+    generator.manual_seed(eval_seed)
+    viz_collector = VizCollector(max_trials=16, seed=eval_seed) if save_viz and rank == 0 else None
     for batch in loader:
         batch = move_batch_to_device(batch, device)
-        mae_mask, _ = generate_mae_mask(batch, cfg, generator=generator)
+        mae_mask, mask_type = generate_mae_mask(batch, cfg, generator=generator)
         out = model(
             batch["content"],
             batch["quality"],
@@ -202,17 +224,25 @@ def validate(
             out["pred"], batch["content"], batch["quality"], mae_mask, batch["pad_mask"], batch["eye_token_valid"], cfg
         )
         update_metric_sums(sums, out["pred"], batch["content"], batch["quality"], mae_mask, batch["pad_mask"], batch["eye_token_valid"], stats, cfg)
-        if first_batch is None:
-            first_batch = batch
-            first_pred = out["pred"]
-            first_mask = mae_mask
+        update_group_metrics(group_sums, batch, out["pred"], mae_mask, mask_type, cfg)
+        if viz_collector is not None:
+            viz_collector.observe(batch, out["pred"], mae_mask, mask_type)
     reduce_metric_sums(sums)
+    reduce_group_metric_sums(group_sums)
     metrics = finalize_metric_sums(sums, prefix="val", cfg=cfg)
-    if save_viz and rank == 0 and first_batch is not None:
+    group_metrics = finalize_group_metrics(group_sums, cfg)
+    metrics.update(flatten_group_metrics(group_metrics))
+    if save_viz and rank == 0:
+        write_json(Path(cfg["experiment"]["output_dir"]) / "metrics_last_by_group.json", group_metrics)
+    if viz_collector is not None:
+        viz_batch = viz_collector.build_batch()
+        if viz_batch is None:
+            model.train()
+            return metrics
         save_visualizations(
-            first_batch,
-            first_pred,
-            first_mask,
+            viz_batch[0],
+            viz_batch[1],
+            viz_batch[2],
             Path(cfg["experiment"]["output_dir"]) / "visualizations" / f"step_{global_step}",
             cfg,
             max_trials=16,
@@ -349,10 +379,11 @@ def train_main(args: argparse.Namespace) -> None:
                         for key, value in metrics.items():
                             writer.add_scalar(key, value, global_step)
                         write_json(out_dir / "metrics_last.json", metrics)
+                        log_metrics = {key: value for key, value in metrics.items() if not key.startswith("val_group/")}
                         LOGGER.info(
                             "val step=%s %s",
                             global_step,
-                            " ".join(f"{key}={value:.5g}" for key, value in sorted(metrics.items())),
+                            " ".join(f"{key}={value:.5g}" for key, value in sorted(log_metrics.items())),
                         )
                         monitor = cfg["checkpoint"]["monitor"]
                         value = metrics.get(monitor, metrics.get("val/total_loss", math.inf))

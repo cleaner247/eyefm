@@ -1316,7 +1316,7 @@ model:
   dropout: 0.1
   norm: rmsnorm
   activation: swiglu
-  max_patches: 256
+  max_patches: 384
 
   use_cls: false
   use_token_type_embedding: true

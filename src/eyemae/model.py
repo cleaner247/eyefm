@@ -83,7 +83,8 @@ class EyeMAEModel(nn.Module):
         self.quality_tokenizer = ConvTokenizer(1, (32,), patch, d_model, (3,))
         self.stim_tokenizer = ConvTokenizer(4, (64,), patch, d_model, (3,))
         self.task_embedding = nn.Embedding(4, d_model)
-        self.token_type_embedding = nn.Embedding(3, d_model)
+        self.use_token_type_embedding = bool(model_cfg.get("use_token_type_embedding", True))
+        self.token_type_embedding = nn.Embedding(3, d_model) if self.use_token_type_embedding else None
         self.time_embedding = nn.Embedding(self.max_patches, d_model)
         self.mask_token = nn.Parameter(torch.zeros(d_model))
         self.fusion_norm = nn.LayerNorm(d_model)
@@ -124,9 +125,12 @@ class EyeMAEModel(nn.Module):
 
         task = self.task_embedding(task_id).view(bsz, 1, 1, self.d_model)
         times = self.time_embedding(torch.arange(n, device=content.device)).view(1, n, self.d_model)
-        stim_type = self.token_type_embedding(torch.zeros((), dtype=torch.long, device=content.device))
-        left_type = self.token_type_embedding(torch.ones((), dtype=torch.long, device=content.device))
-        right_type = self.token_type_embedding(torch.full((), 2, dtype=torch.long, device=content.device))
+        if self.token_type_embedding is None:
+            stim_type = left_type = right_type = torch.zeros(self.d_model, dtype=content_token.dtype, device=content.device)
+        else:
+            stim_type = self.token_type_embedding(torch.zeros((), dtype=torch.long, device=content.device))
+            left_type = self.token_type_embedding(torch.ones((), dtype=torch.long, device=content.device))
+            right_type = self.token_type_embedding(torch.full((), 2, dtype=torch.long, device=content.device))
 
         s_tokens = stim_token + task.squeeze(2) + times + stim_type.view(1, 1, -1)
         l_tokens = content_token[:, :, 0] + quality_token[:, :, 0] + task.squeeze(2) + times + left_type.view(1, 1, -1)
