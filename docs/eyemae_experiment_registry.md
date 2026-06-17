@@ -668,7 +668,38 @@ outputs/downstream_disease_binary_kfold_extra_seed42/summary_aggregate.json
 Status:
 
 ```text
-In progress locally as of 2026-06-16 23:25 Asia/Shanghai.
+Complete locally.
+
+Started: 2026-06-16 23:23 Asia/Shanghai.
+Finished: 2026-06-17 10:30 Asia/Shanghai.
+
+Final count:
+  metrics_final.json = 80 / 80
+  summary.csv rows = 80
+  summary_aggregate.csv rows = 16
+
+Generated summaries:
+  outputs/downstream_disease_binary_kfold_extra_seed42/summary.csv
+  outputs/downstream_disease_binary_kfold_extra_seed42/summary.json
+  outputs/downstream_disease_binary_kfold_extra_seed42/summary_aggregate.csv
+  outputs/downstream_disease_binary_kfold_extra_seed42/summary_aggregate.json
+
+Final session state:
+  eyemae_kfold_extra_fold0 exited normally
+  eyemae_kfold_extra_fold1 exited normally
+  eyemae_kfold_extra_fold2 exited normally
+  eyemae_kfold_extra_fold3 exited normally
+  eyemae_kfold_extra_fold4_wait exited normally
+  eyemae_kfold_extra_summary_wait exited after writing summaries
+
+Filtered error count:
+  fold_0.log = 0
+  fold_1.log = 0
+  fold_2.log = 0
+  fold_3.log = 0
+  fold_4.log = 0
+  summary_wait.log = 0
+
 Initial launch check:
   extra final count = 0 / 80
   fold_0..3 are running AD/scratch on GPU 0/1/2/4
@@ -694,6 +725,27 @@ Update, 2026-06-17 01:38 Asia/Shanghai:
   filtered error count = 0
 ```
 
+Final 5-fold aggregate results, subject-level test metrics:
+
+| Disease | Mode | n | AUROC mean+-std | F1 mean+-std | Accuracy mean |
+|---|---|---:|---:|---:|---:|
+| AD | pretrained_full | 5 | 0.8531 +- 0.0904 | 0.8941 +- 0.0467 | 0.8312 |
+| AD | pretrained_linear_probe | 5 | 0.8247 +- 0.1039 | 0.8747 +- 0.0337 | 0.8159 |
+| AD | pretrained_partial | 5 | 0.8619 +- 0.0775 | 0.8839 +- 0.0596 | 0.8233 |
+| AD | scratch | 5 | 0.7574 +- 0.1110 | 0.8005 +- 0.0543 | 0.7201 |
+| MCI | pretrained_full | 5 | 0.7898 +- 0.0399 | 0.6357 +- 0.0803 | 0.7076 |
+| MCI | pretrained_linear_probe | 5 | 0.7225 +- 0.0300 | 0.5687 +- 0.1624 | 0.6868 |
+| MCI | pretrained_partial | 5 | 0.7526 +- 0.0504 | 0.5590 +- 0.1349 | 0.6970 |
+| MCI | scratch | 5 | 0.7200 +- 0.0357 | 0.5926 +- 0.0556 | 0.6998 |
+| 偏头痛 | pretrained_full | 5 | 0.7969 +- 0.0454 | 0.7371 +- 0.0435 | 0.7690 |
+| 偏头痛 | pretrained_linear_probe | 5 | 0.7725 +- 0.0229 | 0.6991 +- 0.0507 | 0.7254 |
+| 偏头痛 | pretrained_partial | 5 | 0.7522 +- 0.0287 | 0.5526 +- 0.1455 | 0.6646 |
+| 偏头痛 | scratch | 5 | 0.7397 +- 0.0862 | 0.5914 +- 0.0827 | 0.6602 |
+| 癫痫 | pretrained_full | 5 | 0.8576 +- 0.0194 | 0.7967 +- 0.0281 | 0.7777 |
+| 癫痫 | pretrained_linear_probe | 5 | 0.8374 +- 0.0233 | 0.7624 +- 0.0267 | 0.7568 |
+| 癫痫 | pretrained_partial | 5 | 0.8560 +- 0.0213 | 0.7692 +- 0.0389 | 0.7604 |
+| 癫痫 | scratch | 5 | 0.7947 +- 0.0342 | 0.7343 +- 0.0383 | 0.7234 |
+
 ## Future Run Recording Rule
 
 For every new training or evaluation version, add an entry here with:
@@ -709,4 +761,17 @@ For every new training or evaluation version, add an entry here with:
 8. Summary command
 9. Expected metrics_final.json count
 10. Current status
+```
+
+Checkpoint retention rule:
+
+```text
+For every completed downstream model variant, keep both files under:
+  <output_root>/fold_<k>/<disease>/<mode>/checkpoint_best.pt
+  <output_root>/fold_<k>/<disease>/<mode>/checkpoint_last.pt
+
+The registry records the output root, split root, config, launch command,
+expected count, and final summary files. The checkpoint tensors remain local
+under outputs/ and are intentionally not pushed to GitHub unless a separate
+artifact storage or Git LFS workflow is added.
 ```
