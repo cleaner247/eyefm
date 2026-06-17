@@ -37,7 +37,8 @@ downstream_train:
   weight_decay: 0.01
   grad_clip: 1.0
   max_epochs: 100
-  early_stopping_patience: 10
+  early_stopping_patience: 20
+  min_epochs_before_early_stopping: 50
   batch_size: 64
   num_workers: 8
   pin_memory: true

@@ -9,7 +9,13 @@ import torch
 from eyemae.config import load_config
 from eyemae.downstream_data import DownstreamTrialDataset, collate_downstream_trials
 from eyemae.downstream_metrics import aggregate_subject_predictions, binary_auroc, compute_binary_metrics
-from eyemae.finetune import DownstreamClassifier, apply_freeze_mode, load_pretrained_encoder, train_downstream
+from eyemae.finetune import (
+    DownstreamClassifier,
+    apply_freeze_mode,
+    load_pretrained_encoder,
+    should_stop_early,
+    train_downstream,
+)
 from eyemae.make_downstream_splits import make_downstream_splits
 from eyemae.pooling import eye_mean_pool
 
@@ -274,6 +280,27 @@ def test_downstream_metrics_and_subject_aggregation() -> None:
     subject_rows = aggregate_subject_predictions(rows)
     assert len(subject_rows) == 2
     assert subject_rows[0]["num_trials"] == 2
+
+
+def test_should_stop_early_respects_min_epochs() -> None:
+    assert not should_stop_early(
+        epoch=48,
+        epochs_without_improve=20,
+        patience=20,
+        min_epochs_before_early_stopping=50,
+    )
+    assert should_stop_early(
+        epoch=49,
+        epochs_without_improve=20,
+        patience=20,
+        min_epochs_before_early_stopping=50,
+    )
+    assert not should_stop_early(
+        epoch=60,
+        epochs_without_improve=19,
+        patience=20,
+        min_epochs_before_early_stopping=50,
+    )
 
 
 def test_train_downstream_tiny_smoke(tmp_path: Path) -> None:

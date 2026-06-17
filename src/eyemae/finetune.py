@@ -436,6 +436,19 @@ def _select_monitor_value(metrics: dict[str, Any], monitor: str) -> tuple[float,
     return fallback_value, fallback
 
 
+def should_stop_early(
+    *,
+    epoch: int,
+    epochs_without_improve: int,
+    patience: int,
+    min_epochs_before_early_stopping: int = 0,
+) -> bool:
+    epochs_completed = int(epoch) + 1
+    if epochs_completed < int(min_epochs_before_early_stopping):
+        return False
+    return int(epochs_without_improve) >= int(patience)
+
+
 def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: str | Path | None = None) -> dict[str, Any]:
     set_seed(int(cfg["downstream_train"].get("seed", cfg["train"].get("seed", 42))))
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -482,7 +495,8 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
         start_epoch = int(resume_checkpoint.get("epoch", -1)) + 1
         best_epoch = int(resume_checkpoint.get("best_epoch", -1))
         LOGGER.info("Resumed downstream checkpoint %s from epoch=%s", resume, start_epoch)
-    patience = int(cfg["downstream_train"].get("early_stopping_patience", 10))
+    patience = int(cfg["downstream_train"].get("early_stopping_patience", 20))
+    min_epochs_before_early_stopping = int(cfg["downstream_train"].get("min_epochs_before_early_stopping", 50))
     epochs_without_improve = 0
     max_epochs = int(cfg["downstream_train"].get("max_epochs", 100))
     max_train_batches = cfg.get("debug", {}).get("max_train_batches")
@@ -594,8 +608,21 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
                 disease=disease,
                 pretrained_info=pretrained_info,
             )
-            if epochs_without_improve >= patience:
-                LOGGER.info("%s/%s early stopping at epoch=%s", disease, mode, epoch)
+            if should_stop_early(
+                epoch=epoch,
+                epochs_without_improve=epochs_without_improve,
+                patience=patience,
+                min_epochs_before_early_stopping=min_epochs_before_early_stopping,
+            ):
+                LOGGER.info(
+                    "%s/%s early stopping at epoch=%s epochs_without_improve=%s patience=%s min_epochs_before_early_stopping=%s",
+                    disease,
+                    mode,
+                    epoch,
+                    epochs_without_improve,
+                    patience,
+                    min_epochs_before_early_stopping,
+                )
                 break
         best_path = out_dir / "checkpoint_best.pt"
         if best_path.exists():
@@ -660,6 +687,7 @@ def main() -> None:
     parser.add_argument("--output_root", default=None)
     parser.add_argument("--output_dir", default=None)
     parser.add_argument("--max_epochs", type=int, default=None)
+    parser.add_argument("--min_epochs_before_early_stopping", type=int, default=None)
     parser.add_argument("--max_train_batches", type=int, default=None)
     parser.add_argument("--max_eval_batches", type=int, default=None)
     args = parser.parse_args()
@@ -680,6 +708,8 @@ def main() -> None:
         raise ValueError("Provide --mode or downstream.mode")
     if args.max_epochs is not None:
         cfg["downstream_train"]["max_epochs"] = int(args.max_epochs)
+    if args.min_epochs_before_early_stopping is not None:
+        cfg["downstream_train"]["min_epochs_before_early_stopping"] = int(args.min_epochs_before_early_stopping)
     cfg.setdefault("debug", {})
     if args.max_train_batches is not None:
         cfg["debug"]["max_train_batches"] = int(args.max_train_batches)

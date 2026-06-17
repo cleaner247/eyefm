@@ -1139,10 +1139,21 @@ optimizer contains trainable encoder params + head params
 
 ```yaml
 train:
-  max_epochs: 50
-  early_stopping_patience: 10
+  max_epochs: 100
+  early_stopping_patience: 20
+  min_epochs_before_early_stopping: 50
   metric_for_best_model: val/subject_auroc
   mode: max
+```
+
+规则：
+
+```text
+每个下游 fine-tune run 最多训练 100 epoch。
+前 50 个 epoch 必须完整训练，不允许触发 early stopping。
+由于 epoch 从 0 开始编号，跑完 epoch index 49 才算完成 50 个 epoch；从这之后才允许判断 early stopping。
+如果验证集 subject-level AUROC 连续 20 个可判断 epoch 没有提升，停止训练。
+best checkpoint 仍然按整个训练期间最高的 val/subject_auroc 保存；即使 best_epoch < 50，也要继续训练到至少 50 epoch 再允许停止。
 ```
 
 如果 `subject_auroc` 是 NaN：
@@ -1342,8 +1353,9 @@ train:
   precision: bf16
   distributed: ddp
 
-  max_epochs: 50
-  early_stopping_patience: 10
+  max_epochs: 100
+  early_stopping_patience: 20
+  min_epochs_before_early_stopping: 50
   metric_for_best_model: val/subject_auroc
   mode: max
 
