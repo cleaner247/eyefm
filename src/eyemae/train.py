@@ -5,6 +5,7 @@ import logging
 import math
 import os
 import random
+import time
 from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
@@ -12,11 +13,11 @@ from typing import Any
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
 from .batching import TokenBatchSampler
 from .config import load_config, split_path_for_name, validate_config
-from .data import TrialDataset, collate_trials
+from .data import audit_packed_pretrain_splits, collate_trials, make_trial_dataset
 from .eval_artifacts import (
     VizCollector,
     finalize_group_metrics,
@@ -94,8 +95,23 @@ def autocast_context(device: torch.device, precision: str):
     return nullcontext()
 
 
+def _timed_now(device: torch.device, enabled: bool) -> float:
+    if enabled and device.type == "cuda":
+        torch.cuda.synchronize(device)
+    return time.perf_counter()
+
+
+def _interval_enabled(cfg_value: Any, global_step: int, max_steps: int, *, default: bool) -> bool:
+    if cfg_value is None:
+        return default
+    interval = int(cfg_value)
+    if interval <= 0:
+        return False
+    return global_step % interval == 0 or global_step == max_steps - 1
+
+
 def make_loader(
-    dataset: TrialDataset,
+    dataset: Dataset,
     cfg: dict[str, Any],
     *,
     train: bool,
@@ -111,6 +127,8 @@ def make_loader(
         "persistent_workers": bool(cfg["train"].get("persistent_workers", False)) and num_workers > 0,
         "collate_fn": collate_trials,
     }
+    if num_workers > 0 and cfg["train"].get("prefetch_factor") is not None:
+        common["prefetch_factor"] = int(cfg["train"]["prefetch_factor"])
     if train and cfg["train"].get("batch_trials_per_gpu") is None and cfg["train"].get("max_seq_tokens_per_gpu") is not None:
         max_seq_tokens = int(cfg["train"]["max_seq_tokens_per_gpu"])
         configured_max_trials = int(cfg["train"]["max_trials_per_gpu"])
@@ -198,10 +216,24 @@ def validate(
     global_step: int,
     rank: int,
     save_viz: bool = False,
+    compute_group_metrics: bool = True,
+    log_timing: bool = False,
 ) -> dict[str, float]:
     model.eval()
+    timing = {
+        "data_wait": 0.0,
+        "to_device": 0.0,
+        "mask": 0.0,
+        "forward_loss": 0.0,
+        "metrics": 0.0,
+        "reduce_finalize": 0.0,
+        "viz": 0.0,
+    }
+    total_start = _timed_now(device, log_timing)
+    prev_batch_end = total_start
+    batches = 0
     sums = new_metric_sums(device)
-    group_sums = new_group_metric_sums(device)
+    group_sums = new_group_metric_sums(device) if compute_group_metrics else None
     generator = torch.Generator(device=device)
     eval_seed = int(cfg["eval"]["seed"])
     if not bool(cfg["eval"].get("fixed_mask", True)):
@@ -209,8 +241,14 @@ def validate(
     generator.manual_seed(eval_seed)
     viz_collector = VizCollector(max_trials=16, seed=eval_seed) if save_viz and rank == 0 else None
     for batch in loader:
+        batch_start = _timed_now(device, log_timing)
+        timing["data_wait"] += batch_start - prev_batch_end
         batch = move_batch_to_device(batch, device)
+        after_move = _timed_now(device, log_timing)
+        timing["to_device"] += after_move - batch_start
         mae_mask, mask_type = generate_mae_mask(batch, cfg, generator=generator)
+        after_mask = _timed_now(device, log_timing)
+        timing["mask"] += after_mask - after_move
         out = model(
             batch["content"],
             batch["quality"],
@@ -223,18 +261,31 @@ def validate(
         loss, stats = compute_reconstruction_loss(
             out["pred"], batch["content"], batch["quality"], mae_mask, batch["pad_mask"], batch["eye_token_valid"], cfg
         )
+        after_forward_loss = _timed_now(device, log_timing)
+        timing["forward_loss"] += after_forward_loss - after_mask
         update_metric_sums(sums, out["pred"], batch["content"], batch["quality"], mae_mask, batch["pad_mask"], batch["eye_token_valid"], stats, cfg)
-        update_group_metrics(group_sums, batch, out["pred"], mae_mask, mask_type, cfg)
+        if group_sums is not None:
+            update_group_metrics(group_sums, batch, out["pred"], mae_mask, mask_type, cfg)
         if viz_collector is not None:
             viz_collector.observe(batch, out["pred"], mae_mask, mask_type)
+        after_metrics = _timed_now(device, log_timing)
+        timing["metrics"] += after_metrics - after_forward_loss
+        prev_batch_end = after_metrics
+        batches += 1
+    reduce_start = _timed_now(device, log_timing)
     reduce_metric_sums(sums)
-    reduce_group_metric_sums(group_sums)
+    if group_sums is not None:
+        reduce_group_metric_sums(group_sums)
     metrics = finalize_metric_sums(sums, prefix="val", cfg=cfg)
-    group_metrics = finalize_group_metrics(group_sums, cfg)
-    metrics.update(flatten_group_metrics(group_metrics))
-    if save_viz and rank == 0:
-        write_json(Path(cfg["experiment"]["output_dir"]) / "metrics_last_by_group.json", group_metrics)
+    if group_sums is not None:
+        group_metrics = finalize_group_metrics(group_sums, cfg)
+        metrics.update(flatten_group_metrics(group_metrics))
+        if rank == 0:
+            write_json(Path(cfg["experiment"]["output_dir"]) / "metrics_last_by_group.json", group_metrics)
+    reduce_end = _timed_now(device, log_timing)
+    timing["reduce_finalize"] += reduce_end - reduce_start
     if viz_collector is not None:
+        viz_start = _timed_now(device, log_timing)
         viz_batch = viz_collector.build_batch()
         if viz_batch is None:
             model.train()
@@ -246,6 +297,26 @@ def validate(
             Path(cfg["experiment"]["output_dir"]) / "visualizations" / f"step_{global_step}",
             cfg,
             max_trials=16,
+        )
+        viz_end = _timed_now(device, log_timing)
+        timing["viz"] += viz_end - viz_start
+    if log_timing and rank == 0:
+        total = _timed_now(device, True) - total_start
+        LOGGER.info(
+            "val_timing step=%s batches=%s total=%.3fs data_wait=%.3fs to_device=%.3fs mask=%.3fs "
+            "forward_loss=%.3fs metrics=%.3fs reduce_finalize=%.3fs viz=%.3fs group_metrics=%s save_viz=%s",
+            global_step,
+            batches,
+            total,
+            timing["data_wait"],
+            timing["to_device"],
+            timing["mask"],
+            timing["forward_loss"],
+            timing["metrics"],
+            timing["reduce_finalize"],
+            timing["viz"],
+            compute_group_metrics,
+            save_viz,
         )
     model.train()
     return metrics
@@ -260,16 +331,19 @@ def train_main(args: argparse.Namespace) -> None:
         cfg["train"]["val_every_steps"] = min(int(cfg["train"]["val_every_steps"]), int(args.max_steps))
         cfg["train"]["save_every_steps"] = min(int(cfg["train"]["save_every_steps"]), int(args.max_steps))
     validate_config(cfg)
+    packed_audit = audit_packed_pretrain_splits(cfg)
     rank, world_size, _local_rank, device = setup_distributed(cfg)
     setup_logging(rank)
     set_seed(int(cfg["train"]["seed"]) + rank)
     out_dir = ensure_dir(cfg["experiment"]["output_dir"])
     if rank == 0:
         write_json(out_dir / "config.json", cfg)
+        if packed_audit:
+            write_json(out_dir / "packed_pretrain_audit.json", packed_audit)
 
     max_trials = int(cfg.get("debug", {}).get("overfit_trials", 0) or 0) if args.overfit_trials is not None else None
-    train_dataset = TrialDataset(cfg["data"]["data_dir"], split_path_for_name(cfg, "pretrain_train"), cfg, max_trials=max_trials)
-    val_dataset = TrialDataset(cfg["data"]["data_dir"], split_path_for_name(cfg, "pretrain_val"), cfg, max_trials=max_trials)
+    train_dataset = make_trial_dataset(cfg, split_path_for_name(cfg, "train"), max_trials=max_trials)
+    val_dataset = make_trial_dataset(cfg, split_path_for_name(cfg, "validation"), max_trials=max_trials)
     train_loader, train_sampler = make_loader(train_dataset, cfg, train=True, rank=rank, world_size=world_size)
     val_loader, _ = make_loader(val_dataset, cfg, train=False, rank=rank, world_size=world_size)
 
@@ -294,6 +368,7 @@ def train_main(args: argparse.Namespace) -> None:
     max_steps = int(cfg["train"]["max_steps"])
     grad_accum = int(cfg["train"].get("grad_accum_steps", 1))
     precision = str(cfg["train"]["precision"])
+    timing_every = int(cfg["train"].get("timing_every_steps") or 0)
     epoch = start_epoch
     model.train()
     optimizer.zero_grad(set_to_none=True)
@@ -301,13 +376,34 @@ def train_main(args: argparse.Namespace) -> None:
         while global_step < max_steps:
             if hasattr(train_sampler, "set_epoch"):
                 train_sampler.set_epoch(epoch)
+            prev_batch_end = time.perf_counter()
             for batch_index, batch in enumerate(train_loader):
                 if global_step >= max_steps:
                     break
+                log_timing = timing_every > 0 and (
+                    global_step % timing_every == 0 or global_step == max_steps - 1
+                )
+                step_start = _timed_now(device, log_timing)
+                timing = {
+                    "data_wait": step_start - prev_batch_end,
+                    "to_device": 0.0,
+                    "mask": 0.0,
+                    "forward_loss": 0.0,
+                    "denominator_cpu": 0.0,
+                    "backward": 0.0,
+                    "optimizer": 0.0,
+                    "logging": 0.0,
+                    "validation": 0.0,
+                    "checkpoint": 0.0,
+                }
                 batch = move_batch_to_device(batch, device)
+                after_move = _timed_now(device, log_timing)
+                timing["to_device"] = after_move - step_start
                 generator = torch.Generator(device=device)
                 generator.manual_seed(int(cfg["train"]["seed"]) * 1000003 + global_step * 31 + rank)
                 mae_mask, _mask_type = generate_mae_mask(batch, cfg, generator=generator)
+                after_mask = _timed_now(device, log_timing)
+                timing["mask"] = after_mask - after_move
                 lr = cosine_lr(
                     float(cfg["train"]["lr"]),
                     float(cfg["train"]["min_lr"]),
@@ -337,15 +433,23 @@ def train_main(args: argparse.Namespace) -> None:
                         cfg,
                     )
                     loss = loss / grad_accum
-                if float(stats["total_denominator"].detach().cpu()) <= 0:
+                after_forward_loss = _timed_now(device, log_timing)
+                timing["forward_loss"] = after_forward_loss - after_mask
+                denominator = float(stats["total_denominator"].detach().cpu())
+                after_denominator = _timed_now(device, log_timing)
+                timing["denominator_cpu"] = after_denominator - after_forward_loss
+                if denominator <= 0:
                     if rank == 0:
                         LOGGER.warning("Skipping optimizer step with zero reconstruction denominator at step=%s", global_step)
                     global_step += 1
+                    prev_batch_end = time.perf_counter()
                     continue
                 if scaler.is_enabled():
                     scaler.scale(loss).backward()
                 else:
                     loss.backward()
+                after_backward = _timed_now(device, log_timing)
+                timing["backward"] = after_backward - after_denominator
                 if (global_step + 1) % grad_accum == 0:
                     if scaler.is_enabled():
                         scaler.unscale_(optimizer)
@@ -356,7 +460,10 @@ def train_main(args: argparse.Namespace) -> None:
                     else:
                         optimizer.step()
                     optimizer.zero_grad(set_to_none=True)
+                after_optimizer = _timed_now(device, log_timing)
+                timing["optimizer"] = after_optimizer - after_backward
                 if rank == 0 and global_step % int(cfg["train"]["log_every_steps"]) == 0:
+                    log_start = _timed_now(device, log_timing)
                     LOGGER.info(
                         "step=%s loss=%.5f xy=%.5f area=%.5f blink=%.5f vel=%.5f lr=%.2e",
                         global_step,
@@ -371,10 +478,35 @@ def train_main(args: argparse.Namespace) -> None:
                     writer.add_scalar("train/xy_loss", float(stats["xy_loss"].cpu()), global_step)
                     writer.add_scalar("train/blink_loss", float(stats["blink_loss"].cpu()), global_step)
                     writer.add_scalar("train/lr", lr, global_step)
+                    timing["logging"] = _timed_now(device, log_timing) - log_start
 
                 do_val = (global_step > 0 and global_step % int(cfg["train"]["val_every_steps"]) == 0) or global_step == max_steps - 1
                 if do_val:
-                    metrics = validate(model, val_loader, cfg, device, global_step=global_step, rank=rank, save_viz=True)
+                    val_start = _timed_now(device, log_timing)
+                    save_viz = _interval_enabled(
+                        cfg.get("eval", {}).get("visualization_every_steps"),
+                        global_step,
+                        max_steps,
+                        default=True,
+                    )
+                    compute_group_metrics = _interval_enabled(
+                        cfg.get("eval", {}).get("group_metrics_every_steps"),
+                        global_step,
+                        max_steps,
+                        default=True,
+                    )
+                    metrics = validate(
+                        model,
+                        val_loader,
+                        cfg,
+                        device,
+                        global_step=global_step,
+                        rank=rank,
+                        save_viz=save_viz,
+                        compute_group_metrics=compute_group_metrics,
+                        log_timing=log_timing,
+                    )
+                    timing["validation"] = _timed_now(device, log_timing) - val_start
                     if rank == 0:
                         for key, value in metrics.items():
                             writer.add_scalar(key, value, global_step)
@@ -396,10 +528,32 @@ def train_main(args: argparse.Namespace) -> None:
                     (global_step > 0 and global_step % int(cfg["train"]["save_every_steps"]) == 0)
                     or global_step == max_steps - 1
                 ):
+                    checkpoint_start = _timed_now(device, log_timing)
                     save_checkpoint(out_dir / "checkpoint_last.pt", model, optimizer, global_step, epoch, cfg, best_metric)
                     if global_step > 0:
                         save_checkpoint(out_dir / f"checkpoint_step_{global_step:08d}.pt", model, optimizer, global_step, epoch, cfg, best_metric)
+                    timing["checkpoint"] = _timed_now(device, log_timing) - checkpoint_start
+                if log_timing and rank == 0:
+                    total = _timed_now(device, True) - step_start
+                    LOGGER.info(
+                        "train_timing step=%s total=%.3fs data_wait=%.3fs to_device=%.3fs mask=%.3fs "
+                        "forward_loss=%.3fs denominator_cpu=%.3fs backward=%.3fs optimizer=%.3fs "
+                        "logging=%.3fs validation=%.3fs checkpoint=%.3fs",
+                        global_step,
+                        total,
+                        timing["data_wait"],
+                        timing["to_device"],
+                        timing["mask"],
+                        timing["forward_loss"],
+                        timing["denominator_cpu"],
+                        timing["backward"],
+                        timing["optimizer"],
+                        timing["logging"],
+                        timing["validation"],
+                        timing["checkpoint"],
+                    )
                 global_step += 1
+                prev_batch_end = time.perf_counter()
             epoch += 1
     finally:
         writer.close()

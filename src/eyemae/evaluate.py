@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 from .baselines import finalize_baseline_sums, new_baseline_sums, update_baseline_sums
 from .batching import TokenBatchSampler
 from .config import load_config, split_path_for_name, validate_config
-from .data import TrialDataset, collate_trials
+from .data import collate_trials, make_trial_dataset
 from .eval_artifacts import MASK_TYPE_NAMES, VizCollector, finalize_group_metrics, new_group_metric_sums, update_group_metrics
 from .losses import compute_reconstruction_loss
 from .masking import generate_mae_mask
@@ -25,7 +25,7 @@ from .visualize import save_visualizations
 LOGGER = logging.getLogger(__name__)
 
 
-def make_eval_loader(dataset: TrialDataset, cfg: dict[str, Any]) -> DataLoader:
+def make_eval_loader(dataset, cfg: dict[str, Any]) -> DataLoader:
     num_workers = 0 if not torch.cuda.is_available() else max(0, min(2, int(cfg["train"].get("num_workers", 0))))
     common = {
         "num_workers": num_workers,
@@ -63,7 +63,7 @@ def evaluate(cfg, checkpoint_path: str | Path, split: str) -> dict[str, float]:
     validate_config(cfg)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     set_seed(int(cfg["eval"]["seed"]))
-    dataset = TrialDataset(cfg["data"]["data_dir"], split_path_for_name(cfg, split), cfg)
+    dataset = make_trial_dataset(cfg, split_path_for_name(cfg, split))
     loader = make_eval_loader(dataset, cfg)
     model = build_model(cfg).to(device)
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
@@ -149,7 +149,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint", required=True)
-    parser.add_argument("--split", default="pretrain_val", choices=["pretrain_train", "pretrain_val", "pretrain_test"])
+    parser.add_argument(
+        "--split",
+        default="validation",
+        choices=["train", "validation", "test", "pretrain_train", "pretrain_val", "pretrain_validation", "pretrain_test"],
+    )
     args = parser.parse_args()
     setup_logging()
     cfg = load_config(args.config)

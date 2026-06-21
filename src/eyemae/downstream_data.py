@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .data import collate_trials, load_npz_trial, read_split_file
+from .data import PackedTrialStore, collate_trials, load_npz_trial, read_packed_index, read_split_file
 from .manifest import TrialRecord, build_record_index, scan_trial_records
 from .patching import patchify_preprocessed_trial
 from .preprocess import load_area_stats, preprocess_trial
@@ -170,13 +170,109 @@ class DownstreamTrialDataset(Dataset):
         return patched
 
 
+def packed_downstream_label(row: dict[str, str], cfg: dict[str, Any]) -> int:
+    label_cfg = cfg.get("label", {})
+    label_type = label_cfg.get("type", "binary")
+    health = int(row.get("health_label", ""))
+    if label_type == "binary":
+        if health not in {0, 1}:
+            raise ValueError(f"binary health_label must be 0/1, got {health} for {row.get('global_trial_id')}")
+        return health
+    if label_type == "multiclass":
+        if health == 0:
+            return 0
+        pd_label = int(row.get("pd_disease_label", ""))
+        if pd_label not in {0, 1, 2, 3}:
+            raise ValueError(f"pd_disease_label must be 0..3 for patient row {row.get('global_trial_id')}, got {pd_label}")
+        class_id = pd_label + 1
+        num_classes = int(label_cfg.get("num_classes", 5))
+        if class_id < 0 or class_id >= num_classes:
+            raise ValueError(f"class_id out of range for {row.get('global_trial_id')}: {class_id}")
+        return class_id
+    raise ValueError(f"Unsupported label.type: {label_type}")
+
+
+class PackedDownstreamDataset(Dataset):
+    def __init__(
+        self,
+        data_dir: str | Path,
+        index_file: str | Path,
+        cfg: dict[str, Any],
+        *,
+        area_stats: dict[str, Any] | None = None,
+        max_trials: int | None = None,
+        train_subject_trial_counts: dict[str, int] | None = None,
+    ) -> None:
+        self.data_dir = Path(data_dir)
+        self.index_file = Path(index_file)
+        self.cfg = cfg
+        self.rows = read_packed_index(self.index_file)
+        if max_trials is not None:
+            self.rows = self.rows[: int(max_trials)]
+        self.area_stats = area_stats if area_stats is not None else load_area_stats(cfg["area"]["stats_path"])
+        self.store = PackedTrialStore(
+            self.data_dir,
+            max_open_shards_per_worker=int(cfg["data"].get("max_open_shards_per_worker", 16)),
+            validate_offsets=bool(cfg["data"].get("validate_offsets", True)),
+        )
+        if train_subject_trial_counts is None:
+            train_subject_trial_counts = dict(Counter(row["ml_subject_id"] for row in self.rows))
+        self.train_subject_trial_counts = train_subject_trial_counts
+        self.labels = [packed_downstream_label(row, cfg) for row in self.rows]
+
+    def __len__(self) -> int:
+        return len(self.rows)
+
+    def get_num_patches(self, index: int) -> int:
+        row = self.rows[index]
+        if row.get("num_patches_20ms"):
+            return int(row["num_patches_20ms"])
+        return int(row["frame_length"]) // int(self.cfg["patch"]["samples"])
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        row = self.rows[index]
+        trial = self.store.read_trial(row)
+        processed = preprocess_trial(trial, self.cfg, self.area_stats)
+        processed["ml_subject_id"] = trial["ml_subject_id"]
+        processed["global_trial_id"] = trial["global_trial_id"]
+        processed["source_suffix"] = trial.get("source_suffix", "")
+        patched = patchify_preprocessed_trial(processed, self.cfg)
+        if patched is None:
+            raise ValueError(f"No valid patches in packed downstream trial: {trial['path']}")
+        subject = row["ml_subject_id"]
+        count = max(1, int(self.train_subject_trial_counts.get(subject, 1)))
+        label = int(self.labels[index])
+        patched.update(
+            {
+                "label": label,
+                "label_type": self.cfg.get("label", {}).get("type", "binary"),
+                "sample_weight": 1.0 / float(count),
+                "base_subject_id": subject,
+                "ml_subject_id": subject,
+                "subject_key": subject,
+                "record_subject_id": row.get("subject", subject),
+                "global_trial_id": row["global_trial_id"],
+                "disease": self.cfg.get("label", {}).get("task_name", self.cfg.get("downstream", {}).get("task_name", "")),
+                "group": str(row.get("health_label", "")),
+                "usable_eye_pattern": row.get("source_suffix", ""),
+            }
+        )
+        return patched
+
+
 def collate_downstream_trials(items: list[dict[str, Any]]) -> dict[str, Any]:
     batch = collate_trials(items)
-    batch["label"] = torch.as_tensor([item["label"] for item in items], dtype=torch.float32)
+    label_values = [item["label"] for item in items]
+    label_dtype = torch.long if any(isinstance(value, int) and value not in {0, 1} for value in label_values) else torch.float32
+    if any(str(item.get("label_type", "")) == "multiclass" for item in items):
+        label_dtype = torch.long
+    batch["label"] = torch.as_tensor(label_values, dtype=label_dtype)
     batch["sample_weight"] = torch.as_tensor([item["sample_weight"] for item in items], dtype=torch.float32)
     batch["base_subject_id"] = [str(item["base_subject_id"]) for item in items]
+    batch["ml_subject_id"] = [str(item.get("ml_subject_id", item["base_subject_id"])) for item in items]
     batch["subject_key"] = [str(item["subject_key"]) for item in items]
     batch["record_subject_id"] = [str(item["record_subject_id"]) for item in items]
+    batch["global_trial_id"] = [str(item.get("global_trial_id", item["trial_id"])) for item in items]
     batch["disease"] = [str(item["disease"]) for item in items]
     batch["group"] = [str(item["group"]) for item in items]
     batch["usable_eye_pattern"] = [str(item["usable_eye_pattern"]) for item in items]

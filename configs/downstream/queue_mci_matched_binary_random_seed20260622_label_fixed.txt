@@ -1,0 +1,7 @@
+# MCI follow-up experiments requested after MCI label/identity audit.
+# MCI matched rows relabeled from original-MCI raw subject anchors.
+# If invert_anchor_label=true in split_summary.json, final labels are the anchor-label inverse.
+configs/downstream/mci_matched_binary_random_seed20260622_label_fixed_scratch.yaml
+configs/downstream/mci_matched_binary_random_seed20260622_label_fixed_linear_probe.yaml
+configs/downstream/mci_matched_binary_random_seed20260622_label_fixed_partial.yaml
+configs/downstream/mci_matched_binary_random_seed20260622_label_fixed_full.yaml

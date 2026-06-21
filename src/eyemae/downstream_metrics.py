@@ -53,6 +53,40 @@ def _safe_div(num: float, den: float) -> float:
     return num / den if den > 0 else math.nan
 
 
+def _cohen_kappa_from_confusion(matrix: list[list[int]]) -> float:
+    n = sum(sum(row) for row in matrix)
+    if n <= 0:
+        return math.nan
+    observed = sum(matrix[i][i] for i in range(len(matrix))) / float(n)
+    row_totals = [sum(row) for row in matrix]
+    col_totals = [sum(matrix[row][col] for row in range(len(matrix))) for col in range(len(matrix))]
+    expected = sum(row_total * col_total for row_total, col_total in zip(row_totals, col_totals)) / float(n * n)
+    return _safe_div(observed - expected, 1.0 - expected)
+
+
+def _per_class_f1_from_confusion(matrix: list[list[int]]) -> list[float]:
+    num_classes = len(matrix)
+    f1s: list[float] = []
+    for c in range(num_classes):
+        tp = matrix[c][c]
+        fn = sum(matrix[c][j] for j in range(num_classes) if j != c)
+        fp = sum(matrix[i][c] for i in range(num_classes) if i != c)
+        f1s.append(_safe_div(2 * tp, 2 * tp + fp + fn))
+    return f1s
+
+
+def _weighted_f1_from_confusion(matrix: list[list[int]], f1s: list[float]) -> float:
+    supports = [sum(row) for row in matrix]
+    total = sum(supports)
+    if total <= 0:
+        return math.nan
+    numerator = 0.0
+    for support, f1 in zip(supports, f1s):
+        if support > 0 and math.isfinite(f1):
+            numerator += support * f1
+    return numerator / float(total)
+
+
 def compute_binary_metrics(
     labels: Iterable[int | float],
     logits: Iterable[float],
@@ -70,6 +104,8 @@ def compute_binary_metrics(
     tn = sum(1 for y, pred in zip(label_list, preds) if y == 0 and pred == 0)
     fp = sum(1 for y, pred in zip(label_list, preds) if y == 0 and pred == 1)
     fn = sum(1 for y, pred in zip(label_list, preds) if y == 1 and pred == 0)
+    matrix = [[tn, fp], [fn, tp]]
+    class_f1s = _per_class_f1_from_confusion(matrix)
     n = len(label_list)
     eps = 1e-12
     bce = 0.0
@@ -89,8 +125,12 @@ def compute_binary_metrics(
         "sensitivity": _safe_div(tp, tp + fn),
         "specificity": _safe_div(tn, tn + fp),
         "f1": _safe_div(2 * tp, 2 * tp + fp + fn),
+        "weighted_f1": _weighted_f1_from_confusion(matrix, class_f1s),
+        "cohen_kappa": _cohen_kappa_from_confusion(matrix),
         "auroc": binary_auroc(label_list, prob_list),
         "auprc": binary_average_precision(label_list, prob_list),
+        "class_0_f1": class_f1s[0],
+        "class_1_f1": class_f1s[1],
         "tp": float(tp),
         "tn": float(tn),
         "fp": float(fp),
@@ -119,6 +159,82 @@ def binary_confusion_matrix(
     }
 
 
+def softmax(values: list[float]) -> list[float]:
+    if not values:
+        return []
+    m = max(values)
+    exps = [math.exp(v - m) for v in values]
+    den = sum(exps)
+    return [v / den for v in exps]
+
+
+def multiclass_confusion_matrix(labels: Iterable[int], preds: Iterable[int], num_classes: int) -> list[list[int]]:
+    matrix = [[0 for _ in range(num_classes)] for _ in range(num_classes)]
+    for label, pred in zip(labels, preds):
+        matrix[int(label)][int(pred)] += 1
+    return matrix
+
+
+def compute_multiclass_metrics(
+    labels: Iterable[int | float],
+    logits: Iterable[Iterable[float]],
+    *,
+    num_classes: int,
+    prefix: str = "",
+) -> dict[str, float]:
+    label_list = [int(label) for label in labels]
+    logit_rows = [[float(v) for v in row] for row in logits]
+    if len(label_list) != len(logit_rows):
+        raise ValueError("labels and logits must have the same length")
+    probs = [softmax(row) for row in logit_rows]
+    preds = [max(range(num_classes), key=lambda c: prob[c]) for prob in probs]
+    matrix = multiclass_confusion_matrix(label_list, preds, num_classes)
+    n = len(label_list)
+    accuracy = sum(1 for y, pred in zip(label_list, preds) if y == pred) / n if n > 0 else math.nan
+    recalls: list[float] = []
+    f1s = _per_class_f1_from_confusion(matrix)
+    per_class_auroc: list[float] = []
+    per_class_auprc: list[float] = []
+    skipped: list[int] = []
+    for c in range(num_classes):
+        tp = matrix[c][c]
+        fn = sum(matrix[c][j] for j in range(num_classes) if j != c)
+        fp = sum(matrix[i][c] for i in range(num_classes) if i != c)
+        recall = _safe_div(tp, tp + fn)
+        recalls.append(recall)
+        one_vs_rest = [1 if label == c else 0 for label in label_list]
+        scores = [prob[c] for prob in probs]
+        auc = binary_auroc(one_vs_rest, scores)
+        auprc = binary_average_precision(one_vs_rest, scores)
+        if not math.isfinite(auc):
+            skipped.append(c)
+        per_class_auroc.append(auc)
+        per_class_auprc.append(auprc)
+
+    def finite_mean(values: list[float]) -> float:
+        finite = [v for v in values if math.isfinite(v)]
+        return sum(finite) / len(finite) if finite else math.nan
+
+    metrics: dict[str, float] = {
+        "n": float(n),
+        "accuracy": float(accuracy),
+        "balanced_accuracy": finite_mean(recalls),
+        "macro_f1": finite_mean(f1s),
+        "weighted_f1": _weighted_f1_from_confusion(matrix, f1s),
+        "cohen_kappa": _cohen_kappa_from_confusion(matrix),
+        "macro_auroc_ovr": finite_mean(per_class_auroc),
+        "macro_auprc_ovr": finite_mean(per_class_auprc),
+        "num_skipped_auc_classes": float(len(skipped)),
+    }
+    for c in range(num_classes):
+        metrics[f"class_{c}_auroc_ovr"] = per_class_auroc[c]
+        metrics[f"class_{c}_auprc_ovr"] = per_class_auprc[c]
+        metrics[f"class_{c}_f1"] = f1s[c]
+    if prefix:
+        return {f"{prefix}/{key}": value for key, value in metrics.items()}
+    return metrics
+
+
 def aggregate_subject_predictions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for row in rows:
@@ -142,6 +258,38 @@ def aggregate_subject_predictions(rows: list[dict[str, Any]]) -> list[dict[str, 
                 "group": group[0].get("group", ""),
             }
         )
+    return out
+
+
+def aggregate_subject_predictions_multiclass(rows: list[dict[str, Any]], num_classes: int) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        grouped[str(row["subject_key"])].append(row)
+    out: list[dict[str, Any]] = []
+    for subject_key in sorted(grouped):
+        group = grouped[subject_key]
+        labels = {int(row["label"]) for row in group}
+        if len(labels) != 1:
+            raise ValueError(f"Subject has inconsistent downstream labels: {subject_key}")
+        mean_logits = [
+            sum(float(row[f"logit_{c}"]) for row in group) / float(len(group))
+            for c in range(num_classes)
+        ]
+        probs = softmax(mean_logits)
+        payload: dict[str, Any] = {
+            "ml_subject_id": subject_key,
+            "base_subject_id": subject_key,
+            "subject_key": subject_key,
+            "label": int(next(iter(labels))),
+            "pred": int(max(range(num_classes), key=lambda c: probs[c])),
+            "num_trials": len(group),
+            "disease": group[0].get("disease", ""),
+            "group": group[0].get("group", ""),
+        }
+        for c in range(num_classes):
+            payload[f"logit_{c}"] = mean_logits[c]
+            payload[f"prob_{c}"] = probs[c]
+        out.append(payload)
     return out
 
 

@@ -9,8 +9,8 @@ from typing import Any
 
 import numpy as np
 
-from .config import load_config
-from .data import infer_subject_from_path, load_npz_trial, read_split_file
+from .config import load_config, split_path_for_name
+from .data import PackedTrialStore, infer_subject_from_path, load_npz_trial, read_packed_index, read_split_file
 from .utils import setup_logging, write_json
 
 
@@ -36,7 +36,13 @@ def _valid_log_area(trial: dict[str, Any], cfg: dict[str, Any]) -> dict[str, np.
     eye = trial["eye"]
     miss = int(cfg["label"]["missing_value"])
     blink_value = int(cfg["label"]["blink_value"])
-    availability = parse_subject_eye_availability(str(trial["subject_id"]))
+    try:
+        availability = parse_subject_eye_availability(str(trial["subject_id"]))
+    except ValueError:
+        availability = {
+            "left_available": bool(trial.get("left_eye_available", True)),
+            "right_available": bool(trial.get("right_eye_available", True)),
+        }
     out: dict[str, np.ndarray] = {}
     for name, offset, available in (
         ("left", 0, availability["left_available"]),
@@ -77,6 +83,8 @@ def _group_rels_by_subject(rels: list[str], data_dir: Path, cfg: dict[str, Any])
 
 
 def compute_area_stats(cfg: dict[str, Any], split: str = "pretrain_train", out: str | Path | None = None) -> dict[str, Any]:
+    if cfg["data"].get("format") == "packed_mmap":
+        return compute_packed_area_stats(cfg, split=split, out=out)
     split_key = f"{split}_split"
     split_file = Path(cfg["data"][split_key])
     data_dir = Path(cfg["data"]["data_dir"])
@@ -137,10 +145,80 @@ def compute_area_stats(cfg: dict[str, Any], split: str = "pretrain_train", out: 
     return payload
 
 
+def compute_packed_area_stats(cfg: dict[str, Any], split: str = "train", out: str | Path | None = None) -> dict[str, Any]:
+    data_dir = Path(cfg["data"]["data_dir"])
+    index_file = split_path_for_name(cfg, split)
+    rows = read_packed_index(index_file)
+    eps = float(cfg["area"]["eps"])
+    rng = random.Random(int(cfg.get("split", {}).get("seed", 42)))
+    max_subject = cfg["area"].get("max_frames_per_subject")
+    max_global = cfg["area"].get("max_global_frames")
+    max_subject_items = int(max_subject) if max_subject else None
+    max_global_items = int(max_global) if max_global else None
+    grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+    for row in rows:
+        grouped[row["ml_subject_id"]].append(row)
+    store = PackedTrialStore(
+        data_dir,
+        max_open_shards_per_worker=int(cfg["data"].get("max_open_shards_per_worker", 16)),
+        validate_offsets=bool(cfg["data"].get("validate_offsets", True)),
+    )
+    global_values: list[float] = []
+    global_count = 0
+    subjects_payload: dict[str, dict[str, float | int]] = {}
+    for subject_index, (subject_id, subject_rows) in enumerate(sorted(grouped.items()), start=1):
+        subject_values: list[float] = []
+        subject_count = 0
+        for row in subject_rows:
+            if max_subject_items is not None and len(subject_values) >= max_subject_items:
+                break
+            trial = store.read_trial(row)
+            vals_by_eye = _valid_log_area(trial, cfg)
+            vals = (
+                np.concatenate([v for v in vals_by_eye.values() if v.size > 0])
+                if any(v.size for v in vals_by_eye.values())
+                else np.asarray([], dtype=np.float64)
+            )
+            if vals.size == 0:
+                continue
+            subject_count += int(vals.size)
+            global_count += int(vals.size)
+            _reservoir_extend(subject_values, vals, max_subject_items, rng)
+            _reservoir_extend(global_values, vals, max_global_items, rng)
+        median, mad = _median_mad(subject_values, eps)
+        subjects_payload[subject_id] = {
+            "median": median,
+            "mad": mad,
+            "num_valid_frames": int(subject_count),
+        }
+        if subject_index % 250 == 0:
+            LOGGER.info(
+                "packed area stats progress: %s/%s subjects, sampled valid frames=%s",
+                subject_index,
+                len(grouped),
+                global_count,
+            )
+    global_median, global_mad = _median_mad(global_values, eps)
+    payload = {
+        "global": {"median": global_median, "mad": global_mad, "num_valid_frames": int(global_count)},
+        "subjects": {},
+        "source": {"format": "packed_mmap", "index": str(index_file), "num_subjects": len(grouped), "num_trials": len(rows)},
+    }
+    for subject, stats in subjects_payload.items():
+        mad = float(stats["mad"])
+        payload["subjects"][subject] = {
+            "median": float(stats["median"]),
+            "mad": mad if mad >= eps else global_mad,
+            "num_valid_frames": int(stats["num_valid_frames"]),
+        }
+    write_json(out or cfg["area"]["stats_path"], payload)
+    return payload
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--split", default="pretrain_train")
+    parser.add_argument("--split", default="train")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
     setup_logging()

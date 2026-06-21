@@ -1,0 +1,200 @@
+experiment:
+  name: downstream_v3_fast_epilepsy_binary_linear_probe
+  output_dir: outputs/downstream_v3_fast_convergence/epoch1_train/epilepsy_binary/linear_probe
+data:
+  format: packed_mmap
+  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+  train_index: downstream/癫痫/train.csv
+  val_index: downstream/癫痫/validation.csv
+  test_index: downstream/癫痫/test.csv
+  subject_key: ml_subject_id
+  task_column: task_id
+  trial_id_column: global_trial_id
+  max_open_shards_per_worker: 44
+  validate_offsets: false
+  sampling_rate: 1000
+  nan_policy: mark_missing
+split:
+  strategy: provided_subject_heldout
+  seed: 42
+  train_ratio: 0.9
+  val_ratio: 0.05
+  test_ratio: 0.05
+  subject_key: ml_subject_id
+  audit_required: true
+  split_summary: downstream/癫痫/split_summary.json
+label:
+  nonblink_value: 0
+  blink_value: 1
+  missing_value: 2
+  type: binary
+  task_name: epilepsy_binary
+  view: 癫痫
+  label_column: health_label
+  negative_label: 0
+  positive_label: 1
+subject_suffix:
+  D: both_eyes
+  L: left_eye_only
+  R: right_eye_only
+normalization:
+  x_clip_deg: 30
+  y_clip_deg: 20
+area:
+  use_log1p: true
+  robust_zscore_by: subject
+  clip: 5
+  eps: 1.0e-06
+  stats_source: pretrain_train_only
+  stats_path: outputs/area_stats_fast_packed_seed42.json
+  fallback_to_global: true
+  max_frames_per_subject: 5000
+  max_global_frames: 2000000
+stim:
+  use_fix_on: true
+  use_stim_on: true
+  use_stim_xy: true
+  use_last_stim_xy: false
+  use_goal_xy: false
+  stim_dim: 4
+input:
+  content_dim: 4
+  quality_dim: 1
+  stim_dim: 4
+  num_eyes: 2
+patch:
+  samples: 20
+  stride: 20
+attention:
+  min_nonmissing_frac_for_eye_token: 0.05
+model:
+  tokenizer: cnn
+  sequence_format: stim_eye_triplet_no_cls
+  pretrain_style: bert_masked_reconstruction
+  d_model: 512
+  n_layers: 12
+  n_heads: 8
+  ffn_hidden: 1536
+  dropout: 0.1
+  norm: rmsnorm
+  activation: swiglu
+  max_patches: 384
+  use_cls: false
+  use_token_type_embedding: true
+  fusion: add_then_layernorm
+  use_stim_tokens: true
+  broadcast_stim_to_eye: false
+  use_rope: false
+  use_gqa: false
+  use_cross_attention: false
+  use_adaln: false
+mask:
+  ratio_min: 0.35
+  ratio_max: 0.65
+  short_span_prob: 0.7
+  short_span_len_min: 2
+  short_span_len_max: 8
+  long_span_prob: 0.15
+  long_span_len_min: 10
+  long_span_len_max: 25
+  single_eye_mask_prob: 0.25
+  min_nonmissing_frac_for_mae: 0.5
+loss:
+  xy_weight: 1.0
+  area_weight: 0.2
+  blink_weight: 0.1
+  velocity_weight: 0.1
+  loss_only_on_mae_mask: true
+  ignore_missing_for_all_losses: true
+  ignore_blink_for_xy_area_loss: true
+  velocity_within_patch_only: true
+  no_loss_on_stim_tokens: true
+train:
+  seed: 42
+  precision: bf16
+  distributed: ddp
+  optimizer: adamw
+  lr: 0.0002
+  min_lr: 2.0e-05
+  betas:
+  - 0.9
+  - 0.95
+  weight_decay: 0.05
+  grad_clip: 1.0
+  warmup_steps: 2000
+  max_steps: 100000
+  val_every_steps: 1000
+  save_every_steps: 2000
+  log_every_steps: 50
+  batch_trials_per_gpu: null
+  max_seq_tokens_per_gpu: 60000
+  max_trials_per_gpu: 256
+  bucket_by_length: true
+  grad_accum_steps: 1
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  gradient_checkpointing: false
+checkpoint:
+  monitor: val/masked_xy_rmse_deg
+  mode: min
+eval:
+  seed: 1234
+  fixed_mask: true
+downstream:
+  task_name: epilepsy_binary
+  disease: epilepsy_binary
+  mode: linear_probe
+  pretrained_checkpoint: outputs/pretrain_v3_fast_cache44_nooffset/eyemae_cnn_512_12l_patch20_stimtoken/checkpoint_best.pt
+  partial_last_n_layers: 4
+  pooling: eye_mean
+  head:
+    hidden_dim: 256
+    dropout: 0.2
+pretrained:
+  checkpoint: outputs/pretrain_v3_fast_cache44_nooffset/eyemae_cnn_512_12l_patch20_stimtoken/checkpoint_best.pt
+  pretrain_config: configs/eyemae_cnn_512_12l_fast_cache44_nooffset.yaml
+  load_encoder_only: true
+  strict: false
+finetune:
+  mode: linear_probe
+  lr_encoder: 0.0
+  lr_head: 0.001
+downstream_train:
+  seed: 42
+  precision: bf16
+  optimizer: adamw
+  lr: 0.0001
+  encoder_lr: 0.0
+  head_lr: 0.001
+  betas:
+  - 0.9
+  - 0.95
+  weight_decay: 0.01
+  grad_clip: 1.0
+  max_epochs: 1
+  early_stopping_patience: 10
+  min_epochs_before_early_stopping: 0
+  batch_size: 64
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  log_every_steps: 50
+  prefetch_factor: 4
+downstream_checkpoint:
+  monitor: validation/subject_auroc
+  mode: max
+downstream_eval:
+  threshold: 0.5
+  evaluate_splits:
+  - train
+  - val
+  - test
+pooling:
+  token_pooling: eye_mean
+  include_stim_tokens: false
+  trial_to_subject: mean_logits
+class_weighting:
+  enabled: true
+  mode: subject_pos_weight
+debug: {}

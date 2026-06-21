@@ -42,7 +42,6 @@ def validate_config(cfg: dict[str, Any], *, require_splits: bool = True) -> None
         "data.format",
         "data.data_dir",
         "data.sampling_rate",
-        "data.npz_keys",
         "label.nonblink_value",
         "label.blink_value",
         "label.missing_value",
@@ -72,8 +71,9 @@ def validate_config(cfg: dict[str, Any], *, require_splits: bool = True) -> None
     for field in required:
         _require(cfg, field)
 
-    if cfg["data"]["format"] != "npz_per_trial":
-        raise ValueError("data.format must be npz_per_trial")
+    data_format = cfg["data"]["format"]
+    if data_format not in {"npz_per_trial", "packed_mmap"}:
+        raise ValueError("data.format must be one of npz_per_trial, packed_mmap")
     nan_policy = cfg["data"].get("nan_policy", "error")
     if nan_policy not in {"error", "mark_missing"}:
         raise ValueError("data.nan_policy must be one of error, mark_missing")
@@ -83,11 +83,26 @@ def validate_config(cfg: dict[str, Any], *, require_splits: bool = True) -> None
     if not data_dir.exists() and not synthetic_ok:
         raise ValueError(f"data.data_dir does not exist: {data_dir}")
 
-    if require_splits:
-        for field in ("data.pretrain_train_split", "data.pretrain_val_split"):
-            split_path = Path(_require(cfg, field))
-            if not split_path.exists():
-                raise ValueError(f"{field} does not exist: {split_path}")
+    if data_format == "npz_per_trial":
+        _require(cfg, "data.npz_keys")
+        if require_splits:
+            for field in ("data.pretrain_train_split", "data.pretrain_val_split"):
+                split_path = Path(_require(cfg, field))
+                if not split_path.exists():
+                    raise ValueError(f"{field} does not exist: {split_path}")
+    else:
+        for field in ("data.train_index", "data.val_index", "data.test_index"):
+            _require(cfg, field)
+        if str(cfg["data"].get("subject_key", "")) != "ml_subject_id":
+            raise ValueError("packed_mmap requires data.subject_key == ml_subject_id")
+        if require_splits:
+            for field in ("data.train_index", "data.val_index", "data.test_index"):
+                split_path = data_dir / Path(_require(cfg, field))
+                if not split_path.exists():
+                    raise ValueError(f"{field} does not exist: {split_path}")
+            summary = data_dir / str(cfg.get("split", {}).get("split_summary", "pretrain/pretrain_split_summary.json"))
+            if not summary.exists():
+                raise ValueError(f"split.split_summary does not exist: {summary}")
 
     labels = [
         cfg["label"]["nonblink_value"],
@@ -147,6 +162,21 @@ def validate_config(cfg: dict[str, Any], *, require_splits: bool = True) -> None
 
 
 def split_path_for_name(cfg: dict[str, Any], split: str) -> Path:
+    if cfg["data"].get("format") == "packed_mmap":
+        aliases = {
+            "train": "train_index",
+            "pretrain_train": "train_index",
+            "validation": "val_index",
+            "val": "val_index",
+            "pretrain_val": "val_index",
+            "pretrain_validation": "val_index",
+            "test": "test_index",
+            "pretrain_test": "test_index",
+        }
+        key = aliases.get(split)
+        if key is None or key not in cfg["data"]:
+            raise ValueError(f"Unknown split: {split}")
+        return Path(cfg["data"]["data_dir"]) / Path(cfg["data"][key])
     key = f"{split}_split" if split.startswith("pretrain_") else f"pretrain_{split}_split"
     if key not in cfg["data"]:
         raise ValueError(f"Unknown split: {split}")

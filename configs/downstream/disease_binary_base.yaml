@@ -44,9 +44,10 @@ downstream_train:
   pin_memory: true
   persistent_workers: true
   log_every_steps: 50
+  prefetch_factor: 4
 
 downstream_checkpoint:
-  monitor: val/subject/auroc
+  monitor: validation/subject_auroc
   mode: max
 
 downstream_eval:

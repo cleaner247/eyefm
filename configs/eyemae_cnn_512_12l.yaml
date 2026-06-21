@@ -1,15 +1,20 @@
 experiment:
-  name: eyemae_cnn_512_12l_patch20_stimtoken_nolaststim_nogoal_nocls_velloss
-  output_dir: outputs/eyemae_cnn_512_12l_patch20_stimtoken
+  name: pretrain_v3_packed_eyemae_cnn_512_12l_patch20_stimtoken_nolaststim_nogoal_nocls_velloss
+  output_dir: outputs/pretrain_v3/eyemae_cnn_512_12l_patch20_stimtoken
 
 data:
-  format: npz_per_trial
-  data_dir: /mnt/disk_sde/data-260606/extracted/cd_no_cond2_structured_20260609
+  format: packed_mmap
+  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+  train_index: pretrain/pretrain_train.csv
+  val_index: pretrain/pretrain_validation.csv
+  test_index: pretrain/pretrain_test.csv
+  subject_key: ml_subject_id
+  task_column: task_id
+  trial_id_column: global_trial_id
+  max_open_shards_per_worker: 16
+  validate_offsets: true
   npz_schema: cd_no_cond2_gaze_stimulus
   nan_policy: mark_missing
-  pretrain_train_split: splits/pretrain_subject_heldout_seed42/pretrain_train.txt
-  pretrain_val_split: splits/pretrain_subject_heldout_seed42/pretrain_val.txt
-  pretrain_test_split: splits/pretrain_subject_heldout_seed42/pretrain_test.txt
   sampling_rate: 1000
   npz_keys:
     eye: gaze
@@ -36,13 +41,14 @@ data:
   metadata_from_path: true
 
 split:
-  strategy: subject_heldout
+  strategy: provided_subject_heldout
   seed: 42
   train_ratio: 0.90
   val_ratio: 0.05
   test_ratio: 0.05
-  group_by_base_subject_id: true
-  out_dir: splits/pretrain_subject_heldout_seed42
+  subject_key: ml_subject_id
+  audit_required: true
+  split_summary: pretrain/pretrain_split_summary.json
 
 label:
   nonblink_value: 0
@@ -64,9 +70,9 @@ area:
   clip: 5
   eps: 1.0e-6
   stats_source: pretrain_train_only
-  stats_path: outputs/area_stats_subject_heldout_seed42.json
+  stats_path: outputs/area_stats_fast_packed_seed42.json
   fallback_to_global: true
-  max_frames_per_subject: 200000
+  max_frames_per_subject: 5000
   max_global_frames: 2000000
 
 stim:

@@ -8,13 +8,19 @@ import torch
 
 from eyemae.config import load_config
 from eyemae.downstream_data import DownstreamTrialDataset, collate_downstream_trials
-from eyemae.downstream_metrics import aggregate_subject_predictions, binary_auroc, compute_binary_metrics
+from eyemae.downstream_metrics import (
+    aggregate_subject_predictions,
+    binary_auroc,
+    compute_binary_metrics,
+    compute_multiclass_metrics,
+)
 from eyemae.finetune import (
     DownstreamClassifier,
     apply_freeze_mode,
     load_pretrained_encoder,
     should_stop_early,
     train_downstream,
+    weighted_bce_loss,
 )
 from eyemae.make_downstream_splits import make_downstream_splits
 from eyemae.pooling import eye_mean_pool
@@ -244,6 +250,16 @@ def test_eye_mean_pool_masks_padding_and_invalid_eye_tokens() -> None:
     assert torch.equal(pooled, hidden[:, 0, 0])
 
 
+def test_weighted_bce_uses_manual_label_class_weight() -> None:
+    logits = torch.zeros(2)
+    labels = torch.tensor([0.0, 1.0])
+    sample_weight = torch.ones(2)
+    valid = torch.ones(2, dtype=torch.bool)
+    loss, denominator = weighted_bce_loss(logits, labels, sample_weight, valid, torch.tensor(3.0))
+    assert denominator.item() == 4.0
+    assert torch.allclose(loss, torch.tensor(float(np.log(2.0))))
+
+
 def test_downstream_freeze_modes_and_pretrained_loading(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path, tmp_path)
     model = DownstreamClassifier(cfg)
@@ -271,6 +287,8 @@ def test_downstream_metrics_and_subject_aggregation() -> None:
     logits = [-4.0, -2.0, 2.0, 4.0]
     metrics = compute_binary_metrics(labels, logits, threshold=0.5)
     assert metrics["accuracy"] == 1.0
+    assert metrics["weighted_f1"] == 1.0
+    assert metrics["cohen_kappa"] == 1.0
     assert binary_auroc(labels, logits) == 1.0
     rows = [
         {"subject_key": "A", "label": 0, "logit": -2.0},
@@ -280,6 +298,20 @@ def test_downstream_metrics_and_subject_aggregation() -> None:
     subject_rows = aggregate_subject_predictions(rows)
     assert len(subject_rows) == 2
     assert subject_rows[0]["num_trials"] == 2
+
+
+def test_downstream_multiclass_weighted_f1_and_kappa() -> None:
+    labels = [0, 0, 1, 1, 2]
+    logits = [
+        [4.0, 1.0, 0.0],
+        [0.0, 4.0, 1.0],
+        [0.0, 4.0, 1.0],
+        [0.0, 1.0, 4.0],
+        [0.0, 1.0, 4.0],
+    ]
+    metrics = compute_multiclass_metrics(labels, logits, num_classes=3)
+    assert np.isclose(metrics["weighted_f1"], 0.6)
+    assert np.isclose(metrics["cohen_kappa"], 0.4117647058823529)
 
 
 def test_should_stop_early_respects_min_epochs() -> None:
@@ -315,5 +347,10 @@ def test_train_downstream_tiny_smoke(tmp_path: Path) -> None:
     metrics = train_downstream(cfg, disease="MCI", mode="scratch")
     assert (tmp_path / "out" / "checkpoint_last.pt").exists()
     assert (tmp_path / "out" / "metrics_final.json").exists()
+    assert (tmp_path / "out" / "resolved_config.yaml").exists()
+    assert (tmp_path / "out" / "validation_metrics.json").exists()
     assert (tmp_path / "out" / "trial_predictions_val.csv").exists()
+    assert (tmp_path / "out" / "trial_predictions_validation.csv").exists()
+    assert (tmp_path / "out" / "subject_predictions_validation.csv").exists()
+    assert (tmp_path / "out" / "confusion_matrix_validation.json").exists()
     assert "val/subject/accuracy" in metrics

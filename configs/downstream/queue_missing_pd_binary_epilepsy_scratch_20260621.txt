@@ -1,0 +1,7 @@
+# Missing downstream v3 fast jobs after the original launcher read the old queue.
+# Run on currently free GPUs after confirming GPU2/GPU4 are idle.
+configs/downstream/pd_binary_random_seed20260620_fast_scratch.yaml
+configs/downstream/pd_binary_random_seed20260620_fast_linear_probe.yaml
+configs/downstream/pd_binary_random_seed20260620_fast_partial.yaml
+configs/downstream/pd_binary_random_seed20260620_fast_full.yaml
+configs/downstream/epilepsy_binary_scratch.yaml

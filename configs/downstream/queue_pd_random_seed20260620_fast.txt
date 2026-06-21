@@ -1,0 +1,40 @@
+# PD random split, fast early stopping.
+configs/downstream/pd_related_5class_random_seed20260620_fast_scratch.yaml
+configs/downstream/pd_related_5class_random_seed20260620_fast_linear_probe.yaml
+configs/downstream/pd_related_5class_random_seed20260620_fast_partial.yaml
+configs/downstream/pd_related_5class_random_seed20260620_fast_full.yaml
+
+# PD random split, same subjects, binary label: any PD-related subtype vs healthy.
+configs/downstream/pd_binary_random_seed20260620_fast_scratch.yaml
+configs/downstream/pd_binary_random_seed20260620_fast_linear_probe.yaml
+configs/downstream/pd_binary_random_seed20260620_fast_partial.yaml
+configs/downstream/pd_binary_random_seed20260620_fast_full.yaml
+
+# Formal split tasks, fast early stopping.
+configs/downstream/epilepsy_binary_scratch.yaml
+configs/downstream/epilepsy_binary_linear_probe.yaml
+configs/downstream/epilepsy_binary_partial.yaml
+configs/downstream/epilepsy_binary_full.yaml
+configs/downstream/detox_binary_scratch.yaml
+configs/downstream/detox_binary_linear_probe.yaml
+configs/downstream/detox_binary_partial.yaml
+configs/downstream/detox_binary_full.yaml
+configs/downstream/migraine_binary_scratch.yaml
+configs/downstream/migraine_binary_linear_probe.yaml
+configs/downstream/migraine_binary_partial.yaml
+configs/downstream/migraine_binary_full.yaml
+configs/downstream/ad_binary_scratch.yaml
+configs/downstream/ad_binary_linear_probe.yaml
+configs/downstream/ad_binary_partial.yaml
+configs/downstream/ad_binary_full.yaml
+
+# Corrected MCI views. The old mci_binary/mci_matched_binary outputs are
+# provisional only because matched-row labels can be crossed.
+configs/downstream/mci_original_only_binary_scratch.yaml
+configs/downstream/mci_original_only_binary_linear_probe.yaml
+configs/downstream/mci_original_only_binary_partial.yaml
+configs/downstream/mci_original_only_binary_full.yaml
+configs/downstream/mci_matched_binary_random_seed20260621_scratch.yaml
+configs/downstream/mci_matched_binary_random_seed20260621_linear_probe.yaml
+configs/downstream/mci_matched_binary_random_seed20260621_partial.yaml
+configs/downstream/mci_matched_binary_random_seed20260621_full.yaml

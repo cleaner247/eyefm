@@ -1,0 +1,12 @@
+# MCI follow-up experiments requested after MCI label/identity audit.
+# Original MCI with source_dataset=匹配后 removed.
+configs/downstream/mci_original_only_binary_scratch.yaml
+configs/downstream/mci_original_only_binary_linear_probe.yaml
+configs/downstream/mci_original_only_binary_partial.yaml
+configs/downstream/mci_original_only_binary_full.yaml
+
+# MCI matched rows relabeled only by original-MCI raw subject anchors.
+configs/downstream/mci_matched_binary_random_seed20260621_scratch.yaml
+configs/downstream/mci_matched_binary_random_seed20260621_linear_probe.yaml
+configs/downstream/mci_matched_binary_random_seed20260621_partial.yaml
+configs/downstream/mci_matched_binary_random_seed20260621_full.yaml
