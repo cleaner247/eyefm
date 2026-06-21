@@ -29,6 +29,7 @@ Audit checks:
 | `戒毒所` | 26,338 | 170 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | clean |
 | `偏头痛` | 32,130 | 208 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | clean |
 | `AD` | 50,957 | 252 | 1 / 399 | 54 / 16,069 | 4 / 399 | 230 / 16,069 | unresolved high risk |
+| `AD_dedup_rawsubject` | 37,808 | 252 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | clean follow-up |
 | `MCI_original_only_no_matched` | 58,279 | 383 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | clean |
 | `MCI匹配后_random_seed20260622_label_fixed` | 33,154 | 218 | 0 / 0 | 0 / 0 | 0 / 0 | 0 / 0 | clean |
 
@@ -44,7 +45,7 @@ because `ml_subject_id` includes source/group fields.
 | Old `MCI匹配后` label direction was wrong for the intended matched-MCI task. | Handled by generating `downstream/MCI匹配后_random_seed20260622_label_fixed/` and using that in the current report. |
 | MCI matched rows must be anchored to original MCI subjects. | Handled. Current label-fixed matched-MCI view has 33,154 rows, 0 missing original anchors, and 0 rows whose label violates the required inverse-anchor rule. |
 | `detox_binary_random_seed20260621` is a random-resplit sensitivity run. | Clean as a dataset view, but excluded from the current official report by request. |
-| `AD` had a small raw label conflict and raw identity leakage. | Not handled. Current official `AD` view still has one conflicting raw subject (`GaoLianYing`) and raw split overlap. |
+| `AD` had a small raw label conflict and raw identity leakage. | Handled for future AD runs by generating `downstream/AD_dedup_rawsubject/`. The original `downstream/AD/` view still exists and remains high risk. |
 | PD aggregate tasks had small raw label conflict but large raw identity leakage. | Not handled. Current official PD 5-class and PD binary views still have the same raw conflict and large raw split overlap. |
 
 ## Legacy / Excluded Views
@@ -63,14 +64,15 @@ The previous MCI-specific problem has been handled for the current official
 report by replacing the invalid views with `MCI_original_only_no_matched` and
 `MCI匹配后_random_seed20260622_label_fixed`.
 
-The dataset is not fully cleaned overall. The current official report still
-contains `AD`, `PD相关_random_seed20260620`, and
-`PD相关_binary_random_seed20260620`, and these views still have raw
-subject/file-level problems that `ml_subject_id` split checks do not catch.
+The dataset is not fully cleaned overall. The old completed report still
+contains the high-risk original `AD` result. Future AD configs now point to
+`AD_dedup_rawsubject`, but `PD相关_random_seed20260620` and
+`PD相关_binary_random_seed20260620` still have raw subject/file-level problems
+that `ml_subject_id` split checks do not catch.
 
 Recommended next step before treating all downstream numbers as final:
 
-1. Rebuild AD with raw-subject/raw-file conflict removal and raw-subject split.
+1. Rerun AD on `AD_dedup_rawsubject` before replacing old AD metrics.
 2. Rebuild PD aggregate 5-class and PD binary by splitting on raw identity after
    merging, or report the four clean PD subtype matched binary views separately.
 3. Keep old `MCI`, old `MCI匹配后`, and `MCI匹配后_random_seed20260621` out of

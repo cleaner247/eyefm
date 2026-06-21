@@ -3331,3 +3331,16 @@ All-completed convergence/test summary at 2026-06-21 12:58 CST:
 | epoch1 policy | Epoch1 reports validation metrics only. No epoch1 test metric is used in this summary. |
 | 30-epoch policy | The 30-epoch report uses the best tested checkpoint within epochs 0-29 when available. `pd_related_5class/scratch` uses the previously recorded under-30 test result at epoch 20 from `outputs/downstream_v3_fast_current_best_test_eval/pd_related_5class_random_seed20260620/scratch/metrics.json`. `epilepsy_binary/partial` uses the approved epoch 45 exception. |
 | completeness | `epoch1_val_main` and `test_main_30ep` have no missing values across the 32 reported rows. |
+
+AD dedup follow-up at 2026-06-22 CST:
+
+| item | result |
+| --- | --- |
+| reason | Original `downstream/AD/` leaked raw subjects/files between `AD组` and `匹配后`, and `GaoLianYing` appeared as both matched experimental and matched control data. |
+| containment check | `AD/匹配后/实验组` has 13,016 rows; all 13,016 are contained in `AD组/患病` by raw trial key `(subject, basename(relative_source_path), original_trial_index, direction)`. |
+| new view | `downstream/AD_dedup_rawsubject/` |
+| removals | Dropped 13,016 duplicate `匹配后/实验组` rows and 133 conflicting `匹配后/对照组/GaoLianYing` rows. |
+| kept data | 37,808 rows, 252 raw subjects. Train: 24,915 rows / 164 subjects (`0:93`, `1:71` subjects). Validation: 5,388 rows / 38 subjects (`0:24`, `1:14`). Test: 7,505 rows / 50 subjects (`0:30`, `1:20`). |
+| audit | 0 raw-subject/file/trial label conflicts and 0 raw-subject/file/trial split overlap. |
+| configs | Updated `configs/downstream/ad_binary_{scratch,linear_probe,partial,full}.yaml` to use `downstream/AD_dedup_rawsubject/`, `subject_key=subject`, and output root `outputs/downstream_v3_fast/ad_binary_dedup_rawsubject/`. |
+| script | Added `scripts/prepare_ad_dedup_finetune.py` so the AD clean view and configs can be regenerated. |

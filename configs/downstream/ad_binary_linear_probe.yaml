@@ -1,13 +1,13 @@
 experiment:
-  name: downstream_v3_fast_ad_binary_linear_probe
-  output_dir: outputs/downstream_v3_fast/ad_binary/pretrained_linear_probe
+  name: downstream_v3_fast_ad_binary_dedup_rawsubject_linear_probe
+  output_dir: outputs/downstream_v3_fast/ad_binary_dedup_rawsubject/pretrained_linear_probe
 data:
   format: packed_mmap
   data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
-  train_index: downstream/AD/train.csv
-  val_index: downstream/AD/validation.csv
-  test_index: downstream/AD/test.csv
-  subject_key: ml_subject_id
+  train_index: downstream/AD_dedup_rawsubject/train.csv
+  val_index: downstream/AD_dedup_rawsubject/validation.csv
+  test_index: downstream/AD_dedup_rawsubject/test.csv
+  subject_key: subject
   task_column: task_id
   trial_id_column: global_trial_id
   max_open_shards_per_worker: 44
@@ -20,16 +20,16 @@ split:
   train_ratio: 0.9
   val_ratio: 0.05
   test_ratio: 0.05
-  subject_key: ml_subject_id
+  subject_key: subject
   audit_required: true
-  split_summary: downstream/AD/split_summary.json
+  split_summary: downstream/AD_dedup_rawsubject/split_summary.json
 label:
   nonblink_value: 0
   blink_value: 1
   missing_value: 2
   type: binary
   task_name: ad_binary
-  view: AD
+  view: AD_dedup_rawsubject
   label_column: health_label
   negative_label: 0
   positive_label: 1
@@ -142,8 +142,8 @@ eval:
   seed: 1234
   fixed_mask: true
 downstream:
-  task_name: ad_binary
-  disease: ad_binary
+  task_name: ad_binary_dedup_rawsubject
+  disease: ad_binary_dedup_rawsubject
   mode: linear_probe
   pretrained_checkpoint: outputs/pretrain_v3_fast_cache44_nooffset/eyemae_cnn_512_12l_patch20_stimtoken/checkpoint_best.pt
   partial_last_n_layers: 4

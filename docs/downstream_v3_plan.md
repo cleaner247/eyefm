@@ -333,7 +333,7 @@ ml_subject_id = row["ml_subject_id"]
 | `epilepsy_binary` | `downstream/癫痫/` | binary | `health_label` |
 | `detox_binary` | `downstream/戒毒所/` | binary | `health_label` |
 | `migraine_binary` | `downstream/偏头痛/` | binary | `health_label` |
-| `ad_binary` | `downstream/AD/` | binary | `health_label` |
+| `ad_binary` | `downstream/AD_dedup_rawsubject/` | binary | `health_label`; removes duplicated `AD/匹配后/实验组` rows covered by `AD组/患病` and drops the conflicting `GaoLianYing` matched-control rows |
 | `mci_original_only_binary` | `downstream/MCI_original_only_no_matched/` | binary | `health_label`; only original `MCI` rows after removing `source_dataset=匹配后` |
 | `mci_matched_binary_random_seed20260621` | `downstream/MCI匹配后_random_seed20260621/` | binary | `health_label`; matched rows are samples only; keep a row only when its raw `subject` exists in the original `MCI` subject anchor; ignore `MCI匹配后` source label and overwrite label from the original `MCI` anchor |
 

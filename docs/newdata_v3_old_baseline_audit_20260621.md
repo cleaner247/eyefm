@@ -185,9 +185,21 @@ All seven experiment/control file pairs have identical file sizes and identical
 SHA256 hashes. So `GaoLianYing` is duplicated in the raw `AD/匹配后` source
 itself, not merely duplicated by the ML-ready or packed-dataset conversion.
 
-Conclusion: rebuild AD before treating AD downstream results as final. The
-rebuild should split by raw subject and remove or adjudicate raw subjects/files
-whose labels disagree across AD source folders.
+Follow-up generated view:
+
+- `downstream/AD_dedup_rawsubject/`
+- source rows: 50,957
+- removed duplicated `AD/匹配后/实验组` rows: 13,016
+- removed conflicting `AD/匹配后/对照组/GaoLianYing` rows: 133
+- kept rows: 37,808
+- containment check: all 13,016 `匹配后/实验组` rows are contained in
+  `AD组/患病` by raw trial key
+- final audit: 0 raw-subject/file/trial label conflicts and 0 raw-subject/file/trial
+  split overlap
+
+Conclusion: use `AD_dedup_rawsubject` for future AD downstream runs. The
+original `AD` view remains as a historical high-risk view and should not be used
+for final AD reporting.
 
 ### PD
 
