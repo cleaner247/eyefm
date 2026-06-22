@@ -4,10 +4,10 @@
 
 在已经生成好的高速 packed 数据集上，实现并运行 EyeBERT-style 自监督预训练。
 
-正式数据集已经存在：
+正式 v2 预训练数据集已经存在：
 
 ```text
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
 ```
 
 本计划**不再构建 packed 数据集**，不实现 converter，不重新生成 `shards/`、`pretrain/` 或 `downstream/`。Codex 本轮只需要实现：
@@ -103,7 +103,7 @@ model:
 ```text
 数据：
   format = packed_mmap
-  data_dir = /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+  data_dir = /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
   读取已生成的 shards/ 与 pretrain/*.csv index
   不重新构建 packed dataset
 
@@ -146,10 +146,10 @@ packed dataset converter
 
 # 2. 已生成 packed 数据集格式
 
-数据集根目录：
+预训练 packed 数据集根目录：
 
 ```text
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
 ```
 
 必须存在：
@@ -178,13 +178,6 @@ pretrain/
   pretrain_validation.csv
   pretrain_test.csv
   pretrain_split_summary.json
-
-downstream/
-  <view>/
-    train.csv
-    validation.csv
-    test.csv
-    split_summary.json
 ```
 
 注意：
@@ -286,7 +279,7 @@ python -m eyemae.compute_area_stats --config configs/eyemae_cnn_512_12l.yaml --s
 ```text
 data.format in {packed_mmap, npz_per_trial}
 正式训练 data.format == packed_mmap
-正式训练 data.data_dir == /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+正式训练 data.data_dir == /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
 正式训练 data.train_index == pretrain/pretrain_train.csv
 正式训练 data.val_index == pretrain/pretrain_validation.csv
 正式训练 data.test_index == pretrain/pretrain_test.csv
@@ -1258,7 +1251,7 @@ experiment:
 
 data:
   format: packed_mmap
-  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
 
   train_index: pretrain/pretrain_train.csv
   val_index: pretrain/pretrain_validation.csv
@@ -1510,7 +1503,7 @@ python -m eyemae.evaluate \
 第一版不要做：
 
 ```text
-不要重新构建 eyemae_fast_dataset_v1
+不要重新构建 eyemae_fast_dataset_v2
 不要实现 packed converter
 不要重新生成 pretrain split
 不要使用 pretrain_val.csv
@@ -2277,3 +2270,64 @@ O3 event boundary tokenization without event label input
 18. condition fusion variants
 19. event-aware / event-driven tokenization
 ```
+
+---
+
+## 24. v2 clean dataset pretrain entry
+
+2026-06-22 追加：新的 `eyemae_fast_dataset_v2` 已生成，pretrain 和 downstream
+物理分开存储。
+
+Pretrain 数据位置：
+
+```text
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain/
+```
+
+索引：
+
+```text
+pretrain/pretrain_train.csv
+pretrain/pretrain_validation.csv
+pretrain/pretrain_test.csv
+```
+
+统计：
+
+```text
+train:      580,190 trials, 3,831 identities
+validation:  32,401 trials,   213 identities
+test:        32,387 trials,   213 identities
+total:      644,978 trials, 4,257 identities
+```
+
+清洗规则：
+
+```text
+drop AD/匹配后/实验组
+drop AD/匹配后/对照组/GaoLianYing
+drop all PD相关/*匹配后/实验组
+drop all MCI/匹配后 for pretrain
+deduplicate controls by name + age + education
+```
+
+pretrain train/validation/test identity overlap 为 0。
+
+入口配置：
+
+```text
+configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml
+```
+
+完整 v2 pretrain 应先重新计算 area stats：
+
+```bash
+python -m eyemae.compute_area_stats \
+  --config configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml \
+  --split train \
+  --out outputs/area_stats_fast_packed_v2_clean_full_subject_seed20260622.json
+```
+
+注意：如果 downstream 仍使用旧 v3 pretrained checkpoint，则 downstream 复测应
+继续使用旧 v3 area stats，以隔离数据清洗效果。只有重新完成 v2 pretrain 后，
+才能把 v2 area stats + v2 checkpoint 作为正式 v2 pretrain-to-finetune 结果。

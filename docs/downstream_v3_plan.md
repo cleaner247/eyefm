@@ -4,10 +4,10 @@
 
 在已完成第一版 EyeBERT-style 预训练的基础上，使用已经生成好的 packed 数据集完成健康/疾病下游微调与评估。
 
-正式数据集已经存在：
+正式 v2 数据集已经存在：
 
 ```text
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2
 ```
 
 本计划不重新生成 packed 数据集，不重新划分 downstream split。Codex 本轮只需要实现：
@@ -87,9 +87,9 @@ pretrain/pretrain_test.csv
 下游 split：
 
 ```text
-downstream/<view>/train.csv
-downstream/<view>/validation.csv
-downstream/<view>/test.csv
+finetune/<task>/train.csv
+finetune/<task>/validation.csv
+finetune/<task>/test.csv
 ```
 
 不要复用预训练 split 作为疾病任务 split。
@@ -99,9 +99,9 @@ downstream/<view>/test.csv
 正式 packed 数据集已经提供下游 split：
 
 ```text
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1/downstream/<view>/train.csv
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1/downstream/<view>/validation.csv
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1/downstream/<view>/test.csv
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/<task>/train.csv
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/<task>/validation.csv
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/<task>/test.csv
 ```
 
 fine-tune 代码必须直接读取这些 CSV。
@@ -194,7 +194,7 @@ area stats loader
 
 ```text
 data.format = packed_mmap
-data.data_dir = /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
+data.data_dir = /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/<task>
 ```
 
 根目录必须存在：
@@ -207,17 +207,19 @@ label_maps.json
 trials.csv
 subjects.csv
 shards/
-pretrain/
-downstream/
+train.csv
+validation.csv
+test.csv
+split_summary.json
 ```
 
 下游任务直接读取 index：
 
 ```text
-downstream/<view>/train.csv
-downstream/<view>/validation.csv
-downstream/<view>/test.csv
-downstream/<view>/split_summary.json
+train.csv
+validation.csv
+test.csv
+split_summary.json
 ```
 
 每行至少包含：
@@ -233,7 +235,7 @@ task_id
 health_label
 ```
 
-`pd_disease_label` 只在 `pd_related_5class` / `downstream/PD相关/` 任务中必需。PD 二分类任务可保留该列用于统计四个亚型来源，但训练标签只使用 `health_label`。其他二分类任务不要求该列存在；如果二分类 view 中存在该列，可以忽略。
+`pd_disease_label` 只在 `pd_related_5class` / `finetune/pd_related_5class/` 任务中必需。PD 二分类任务可保留该列用于统计四个亚型来源，但训练标签只使用 `health_label`。其他二分类任务不要求该列存在；如果二分类 view 中存在该列，可以忽略。
 
 推荐包含：
 
@@ -328,14 +330,14 @@ ml_subject_id = row["ml_subject_id"]
 
 | task_name | view/index目录 | type | label |
 |---|---|---|---|
-| `pd_related_5class` | `downstream/PD相关_random_seed20260620/` | multiclass, 5 classes | `0=control`, `1=帕金森病`, `2=震颤`, `3=特发性震颤`, `4=运动障碍` |
-| `pd_binary` | `downstream/PD相关_binary_random_seed20260620/` | binary | `health_label`; `0=control`, `1=任一 PD 相关亚型患病` |
-| `epilepsy_binary` | `downstream/癫痫/` | binary | `health_label` |
-| `detox_binary` | `downstream/戒毒所/` | binary | `health_label` |
-| `migraine_binary` | `downstream/偏头痛/` | binary | `health_label` |
-| `ad_binary` | `downstream/AD_dedup_rawsubject/` | binary | `health_label`; removes duplicated `AD/匹配后/实验组` rows covered by `AD组/患病` and drops the conflicting `GaoLianYing` matched-control rows |
-| `mci_original_only_binary` | `downstream/MCI_original_only_no_matched/` | binary | `health_label`; only original `MCI` rows after removing `source_dataset=匹配后` |
-| `mci_matched_binary_random_seed20260621` | `downstream/MCI匹配后_random_seed20260621/` | binary | `health_label`; matched rows are samples only; keep a row only when its raw `subject` exists in the original `MCI` subject anchor; ignore `MCI匹配后` source label and overwrite label from the original `MCI` anchor |
+| `pd_related_5class` | `finetune/pd_related_5class/` | multiclass, 5 classes | `0=control`, `1=帕金森病`, `2=震颤`, `3=特发性震颤`, `4=运动障碍` |
+| `pd_binary` | `finetune/pd_binary/` | binary | `health_label`; `0=control`, `1=任一 PD 相关亚型患病` |
+| `epilepsy_binary` | `finetune/epilepsy_binary/` | binary | `health_label` |
+| `detox_binary` | `finetune/detox_binary/` | binary | `health_label` |
+| `migraine_binary` | `finetune/migraine_binary/` | binary | `health_label` |
+| `ad_binary` | `finetune/ad_binary/` | binary | `health_label`; removes duplicated `AD/匹配后/实验组` rows covered by `AD组/患病`, drops the conflicting `GaoLianYing` matched-control rows, then rerandomizes train/validation/test by identity with seed `20260622` |
+| `mci_binary` | `finetune/mci_binary/` | binary | `health_label`; original `MCI/实验组` + `MCI/对照组`, excluding all `MCI/匹配后` |
+| `mci_matched_binary` | `finetune/mci_matched_binary/` | binary | `health_label`; separate matched task using `MCI/匹配后`, with matched label direction corrected |
 
 其他目录例如：
 
@@ -416,10 +418,10 @@ label = health_label
 训练前必须检查：
 
 ```text
-downstream/<view>/train.csv 存在
-downstream/<view>/validation.csv 存在
-downstream/<view>/test.csv 存在
-downstream/<view>/split_summary.json 存在
+finetune/<task>/train.csv 存在
+finetune/<task>/validation.csv 存在
+finetune/<task>/test.csv 存在
+finetune/<task>/split_summary.json 存在
 split_summary.json 中 no_subject_overlap == true
 同一个 ml_subject_id 不跨该 view 的 train/validation/test
 每行包含 shard_id/local_trial_index/frame_offset/frame_length/ml_subject_id/task_id/health_label；仅 PD相关 5分类任务要求 pd_disease_label
@@ -969,7 +971,7 @@ Early stopping：
 
 ```yaml
 train:
-  max_epochs: 100
+  max_epochs: 30
   early_stopping_patience: 10
   min_epochs_before_early_stopping: 0
   metric_for_best_model: validation/subject_auroc
@@ -987,10 +989,11 @@ best checkpoint 始终按最高 validation 主指标保存。
 说明：
 
 ```text
-2026-06-21 当前 downstream_v3 fast 队列口径：
-所有模式 max_epochs=100；
+2026-06-23 当前 corrected v2 downstream 队列口径：
+所有模式 max_epochs=30；
 所有模式 early_stopping_patience=10, min_epochs_before_early_stopping=0。
-scratch 不再额外 cap 到 30 epoch，以免低估随机初始化 baseline。
+scratch 与 linear/partial/full 使用同样的 30 epoch 上限，保证本轮 corrected
+v2 fine-tune 训练预算一致。
 ```
 
 ---
@@ -1632,14 +1635,14 @@ pretrained:
 
 pretraining_exposure:
   mode: all_unlabeled_or_unknown
-  pretrain_subject_manifest: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1/subjects.csv
+  pretrain_subject_manifest: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain/subjects.csv
 
 data:
   format: packed_mmap
-  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1
-  train_index: downstream/AD/train.csv
-  val_index: downstream/AD/validation.csv
-  test_index: downstream/AD/test.csv
+  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/ad_binary
+  train_index: train.csv
+  val_index: validation.csv
+  test_index: test.csv
   subject_key: ml_subject_id
   task_column: task_id
   trial_id_column: global_trial_id
@@ -1737,7 +1740,7 @@ train:
   seed: 42
   precision: bf16
   distributed: ddp
-  max_epochs: 100
+  max_epochs: 30
   early_stopping_patience: 10
   min_epochs_before_early_stopping: 0
   metric_for_best_model: validation/subject_auroc
@@ -1778,9 +1781,10 @@ label:
     运动障碍: 4
 
 data:
-  train_index: downstream/PD相关/train.csv
-  val_index: downstream/PD相关/validation.csv
-  test_index: downstream/PD相关/test.csv
+  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/pd_related_5class
+  train_index: train.csv
+  val_index: validation.csv
+  test_index: test.csv
 
 class_weighting:
   enabled: true
@@ -2016,3 +2020,85 @@ label: 只保留 raw subject 存在于原始 MCI anchor 的 matched row；
 由于 matched view 的健康/患病编码方向被确认反了，最终 label 明确采用原始
 MCI anchor 的反向，并重新划分 train/validation/test，而不是沿用旧
 seed-20260621 split。
+
+---
+
+# 28. v2 clean dataset follow-up
+
+2026-06-22 追加：针对 AD、PD、MCI 已确认的数据问题，生成新的
+`eyemae_fast_dataset_v2`，先修正再统计，再作为后续 fine-tune 入口。
+
+数据位置：
+
+```text
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/<task>/
+```
+
+正式 v2 下游任务：
+
+```text
+pd_related_5class
+pd_binary
+epilepsy_binary
+detox_binary
+migraine_binary
+ad_binary
+mci_binary
+mci_matched_binary
+```
+
+清洗规则：
+
+```text
+AD:
+  drop AD/匹配后/实验组
+  drop AD/匹配后/对照组/GaoLianYing
+  GaoLianYing 仅作为 AD/AD组/患病 保留
+
+PD:
+  drop all PD相关/*匹配后/实验组
+  matched controls 按 name + age + education 去重
+  ZhangMingSha 仅作为健康对照保留
+  LiuWenFang / ZhangMingLin 不进入 corrected PD downstream tasks
+
+MCI:
+  mci_binary 只用原始 MCI/实验组 + MCI/对照组，不混入 MCI/匹配后
+  mci_matched_binary 单独使用 MCI/匹配后，且 matched label 方向反转
+```
+
+划分规则：
+
+```text
+pd_related_5class / pd_binary / ad_binary / mci_binary / mci_matched_binary:
+  identity-level stratified random split, seed=20260622, train/val/test=64/16/20
+
+epilepsy_binary / detox_binary / migraine_binary:
+  preserve v1 identity-level train/validation/test split
+```
+
+所有 v2 downstream task 的 `ml_subject_id` train/validation/test overlap 为 0，
+subject-level label conflict 为 0。详细统计见：
+
+```text
+docs/eyemae_fast_dataset_v2_report.md
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/v2_build_summary.json
+```
+
+临时复测配置：
+
+```text
+configs/v2_corrected_max30_oldpretrain/queue.txt
+```
+
+该 queue 使用 corrected v2 downstream 数据，但仍使用旧 v3 pretrained checkpoint
+和旧 v3 area stats。目的只是先隔离“数据清洗/重新划分”对 downstream 的影响。
+
+完整 v2 pipeline 要求：
+
+```text
+1. 用 configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml
+   和 v2 pretrain split 重新计算 area stats。
+2. 用 v2 area stats 重新 pretrain。
+3. 将 downstream pretrained_checkpoint 和 area.stats_path 切换到 v2 pretrain
+   checkpoint/stats 后再作为正式 v2 pretrain-to-finetune 结果报告。
+```

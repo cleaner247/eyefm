@@ -1,55 +1,47 @@
 # EyeFM / EyeMAE
 
-This repository contains the current EyeMAE first-version pretraining project for 1000 Hz eye-movement trials. It is the implementation following:
+This repository contains the current EyeMAE/EyeFM pretraining and downstream
+fine-tuning code for 1000 Hz eye-movement trials.
+
+Start from these documents:
 
 ```text
-docs/eyemae_codex_plan_engineered_clean.md
+docs/pretrain_v3_plan.md
+docs/downstream_v3_plan.md
+docs/eyemae_fast_dataset_v2_current.md
+docs/eyemae_fast_dataset_v2_report.md
 ```
 
-Concrete pretraining/downstream run versions are tracked in:
+## Current Dataset
+
+The real dataset is not stored in Git. The current accepted local dataset is:
 
 ```text
-docs/eyemae_experiment_registry.md
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2
 ```
 
-The current main experiment is a task-conditioned masked reconstruction model:
-
-- per-trial 1000 Hz eye movement data
-- 20 ms non-overlapping patches
-- token order `S_i, L_i, R_i` for stimulus/task/time, left-eye, right-eye
-- CNN tokenizer
-- bidirectional Transformer encoder
-- `d_model=512`, `n_layers=12`, `n_heads=8`
-- no CLS, no goal, no last-stim features
-- reconstruct masked `x, y, pupil area, blink`
-- velocity loss enabled
-
-## Repository Contents
-
-Tracked files include source code, configs, scripts, tests, subject-heldout split files, and area statistics needed by the current config.
-
-Large training outputs are intentionally not tracked:
-
-- checkpoints under `outputs/`
-- TensorBoard/event logs
-- visualization PNGs
-- archived intermediate outputs
-
-The current production config references:
+It is a packed-mmap dataset, not one `.npz` per trial. Current roots are:
 
 ```text
-configs/eyemae_cnn_512_12l.yaml
-splits/pretrain_subject_heldout_seed42/
-outputs/area_stats_subject_heldout_seed42.json
+pretrain:
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
+
+downstream:
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/<task>
 ```
 
-The real dataset itself is not included. The config currently expects the data root:
+The current downstream task names are:
 
 ```text
-/mnt/disk_sde/data-260606/extracted/cd_no_cond2_structured_20260609
+pd_related_5class
+pd_binary
+epilepsy_binary
+detox_binary
+migraine_binary
+ad_binary
+mci_binary
+mci_matched_binary
 ```
-
-If your machine stores the same data elsewhere, update only `data.data_dir` in the config while keeping the tracked split files and area stats unchanged for the same experiment.
 
 ## Setup
 
@@ -58,79 +50,77 @@ cd eyefm
 pip install -e .
 ```
 
-The project avoids pandas/sklearn dependencies. Main runtime dependencies are in `requirements.txt`.
-
-## Debug / Test Workflow
-
-Generate synthetic debug data and run tests:
+Run tests:
 
 ```bash
-python tests/fixtures/make_synthetic_npz.py --out_dir tests/fixtures/synthetic_npz --num_trials 128
 pytest -q
 ```
 
-Run the small debug training config:
+## Pretraining
 
-```bash
-python -m eyemae.make_splits --config configs/debug.yaml
-python -m eyemae.compute_area_stats --config configs/debug.yaml --split pretrain_train --out outputs/debug_area_stats.json
-python -m eyemae.train --config configs/debug.yaml
+The current v2 pretraining config is:
+
+```text
+configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml
 ```
 
-## Main Experiment
-
-The main split and area statistics are already tracked. To reproduce the current pretraining run on the real data:
+Before formal v2 pretraining, compute v2 area stats:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2 torchrun --standalone --nproc_per_node=3 \
+python -m eyemae.compute_area_stats \
+  --config configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml \
+  --split pretrain_train \
+  --out outputs/area_stats_fast_packed_v2_clean_full_subject_seed20260622.json
+```
+
+Run v2 pretraining:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
   -m eyemae.train \
-  --config configs/eyemae_cnn_512_12l.yaml
+  --config configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml
 ```
 
-Evaluate a trained checkpoint:
+Evaluate:
 
 ```bash
 python -m eyemae.evaluate \
-  --config configs/eyemae_cnn_512_12l.yaml \
-  --checkpoint outputs/eyemae_cnn_512_12l_patch20_stimtoken/checkpoint_best.pt \
+  --config configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml \
+  --checkpoint outputs/pretrain_v2_clean/eyemae_cnn_512_12l_patch20_stimtoken/checkpoint_best.pt \
   --split pretrain_test
 ```
 
-Evaluation writes:
-
-```text
-outputs/eyemae_cnn_512_12l_patch20_stimtoken/evaluation/pretrain_test/metrics.json
-outputs/eyemae_cnn_512_12l_patch20_stimtoken/evaluation/pretrain_test/metrics_by_group.json
-outputs/eyemae_cnn_512_12l_patch20_stimtoken/evaluation/pretrain_test/baselines.json
-```
-
-## Current Reference Results
-
-For the local best checkpoint from the current run:
-
-```text
-pretrain_test/masked_xy_rmse_deg = 0.468622
-pretrain_test/total_loss = 0.00124888
-pretrain_test/masked_blink_auc = 0.995496
-previous_value baseline masked_xy_rmse_deg = 2.013649
-linear_interpolation baseline masked_xy_rmse_deg = 2.739195
-long_span model masked_xy_rmse_deg = 1.510749
-long_span linear_interpolation baseline masked_xy_rmse_deg = 4.216968
-```
-
-The checkpoint files are not in Git. Use a release/artifact store for weights if needed.
-
 ## Downstream Fine-Tuning
 
-The downstream disease-classification plan is in:
+The current downstream queue is:
 
 ```text
-docs/eyemae_downstream_finetune_codex_plan.md
+configs/v2_corrected_max30_oldpretrain/queue.txt
 ```
 
-Completed and active downstream run versions, including the fixed holdout run
-and the PD/addiction 5-fold run, are tracked in:
+It runs 8 downstream tasks times 4 modes:
 
 ```text
-docs/eyemae_experiment_registry.md
+scratch
+linear_probe
+partial
+full
 ```
+
+Run the queue on four GPUs:
+
+```bash
+python scripts/run_downstream_v3_queue.py \
+  --gpus 1,2,3,4 \
+  --config-list-file configs/v2_corrected_max30_oldpretrain/queue.txt \
+  --log-dir outputs/downstream_v2_corrected_max30_oldpretrain_logs/run_manual
+```
+
+The active corrected-v2 downstream run intentionally uses the v2 downstream
+dataset with the existing v3 pretrained checkpoint and old v3 area stats. This
+isolates the effect of data cleaning and split correction. A formal v2
+pretrain-to-finetune result requires recomputing v2 area stats, rerunning v2
+pretraining, then switching downstream configs to the v2 checkpoint and v2 area
+stats.
+
+Large training outputs and checkpoints are intentionally not tracked by Git.

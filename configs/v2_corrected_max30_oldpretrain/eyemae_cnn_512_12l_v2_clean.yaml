@@ -1,0 +1,164 @@
+experiment:
+  name: pretrain_v2_clean_eyemae_cnn_512_12l_patch20_stimtoken
+  output_dir: outputs/pretrain_v2_clean/eyemae_cnn_512_12l_patch20_stimtoken
+data:
+  format: packed_mmap
+  data_dir: /mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
+  train_index: pretrain/pretrain_train.csv
+  val_index: pretrain/pretrain_validation.csv
+  test_index: pretrain/pretrain_test.csv
+  subject_key: ml_subject_id
+  task_column: task_id
+  trial_id_column: global_trial_id
+  max_open_shards_per_worker: 44
+  validate_offsets: false
+  npz_schema: cd_no_cond2_gaze_stimulus
+  nan_policy: mark_missing
+  sampling_rate: 1000
+  npz_keys:
+    eye: gaze
+    stimulus: stimulus
+    task_id: task_id
+    fix_on: fix_on
+    stim: stim
+    subject_id: subject_id
+    trial_id: trial_id
+  gaze_columns:
+    left_x: 0
+    left_y: 1
+    left_area: 2
+    right_x: 3
+    right_y: 4
+    right_area: 5
+    left_label: 6
+    right_label: 7
+  stimulus_columns:
+    stim_x: 0
+    stim_y: 1
+    stim_on: 2
+    fix_on: 3
+  metadata_from_path: true
+split:
+  strategy: provided_subject_heldout
+  seed: 20260622
+  train_ratio: 0.9
+  val_ratio: 0.05
+  test_ratio: 0.05
+  subject_key: ml_subject_id
+  audit_required: true
+  split_summary: pretrain/pretrain_split_summary.json
+label:
+  nonblink_value: 0
+  blink_value: 1
+  missing_value: 2
+subject_suffix:
+  D: both_eyes
+  L: left_eye_only
+  R: right_eye_only
+normalization:
+  x_clip_deg: 30
+  y_clip_deg: 20
+area:
+  use_log1p: true
+  robust_zscore_by: subject
+  clip: 5
+  eps: 1.0e-06
+  stats_source: pretrain_train_only
+  stats_path: outputs/area_stats_fast_packed_v2_clean_full_subject_seed20260622.json
+  fallback_to_global: true
+  max_frames_per_subject: null
+  max_global_frames: 2000000
+stim:
+  use_fix_on: true
+  use_stim_on: true
+  use_stim_xy: true
+  use_last_stim_xy: false
+  use_goal_xy: false
+  stim_dim: 4
+input:
+  content_dim: 4
+  quality_dim: 1
+  stim_dim: 4
+  num_eyes: 2
+patch:
+  samples: 20
+  stride: 20
+attention:
+  min_nonmissing_frac_for_eye_token: 0.05
+model:
+  tokenizer: cnn
+  sequence_format: stim_eye_triplet_no_cls
+  pretrain_style: bert_masked_reconstruction
+  d_model: 512
+  n_layers: 12
+  n_heads: 8
+  ffn_hidden: 1536
+  dropout: 0.1
+  norm: rmsnorm
+  activation: swiglu
+  max_patches: 384
+  use_cls: false
+  use_token_type_embedding: true
+  fusion: add_then_layernorm
+  use_stim_tokens: true
+  broadcast_stim_to_eye: false
+  use_rope: false
+  use_gqa: false
+  use_cross_attention: false
+  use_adaln: false
+mask:
+  ratio_min: 0.35
+  ratio_max: 0.65
+  short_span_prob: 0.7
+  short_span_len_min: 2
+  short_span_len_max: 8
+  long_span_prob: 0.15
+  long_span_len_min: 10
+  long_span_len_max: 25
+  single_eye_mask_prob: 0.25
+  min_nonmissing_frac_for_mae: 0.5
+loss:
+  xy_weight: 1.0
+  area_weight: 0.2
+  blink_weight: 0.1
+  velocity_weight: 0.1
+  loss_only_on_mae_mask: true
+  ignore_missing_for_all_losses: true
+  ignore_blink_for_xy_area_loss: true
+  velocity_within_patch_only: true
+  no_loss_on_stim_tokens: true
+train:
+  seed: 42
+  precision: bf16
+  distributed: ddp
+  optimizer: adamw
+  lr: 0.0002
+  min_lr: 2.0e-05
+  betas:
+  - 0.9
+  - 0.95
+  weight_decay: 0.05
+  grad_clip: 1.0
+  warmup_steps: 2000
+  max_steps: 100000
+  val_every_steps: 1000
+  save_every_steps: 2000
+  log_every_steps: 50
+  batch_trials_per_gpu: null
+  max_seq_tokens_per_gpu: 90000
+  max_trials_per_gpu: 256
+  bucket_by_length: true
+  grad_accum_steps: 1
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  gradient_checkpointing: false
+  timing_every_steps: 0
+checkpoint:
+  monitor: val/masked_xy_rmse_deg
+  mode: min
+eval:
+  seed: 1234
+  fixed_mask: true
+  group_metrics_every_steps: null
+  visualization_every_steps: null

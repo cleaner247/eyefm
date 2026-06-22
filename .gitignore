@@ -18,6 +18,16 @@ __pycache__/
 CODEX_TMUX_HANDOFF.md
 EYEMAE_CONTINUATION_FOR_CODEX.md
 
+# Historical Codex analysis notes. Keep core reproducibility docs tracked, but
+# do not upload generated audit logs or one-off investigation notes by default.
+docs/newdata_v2_*
+docs/newdata_v3_*
+docs/current_goal_guardrail.md
+docs/eyemae_training_audit_codex_plan.md
+docs/eyemae_fast_packed_dataset_adaptation_plan.md
+docs/eyemae_fast_dataset_v2_completion_audit.json
+configs/v2_clean_oldpretrain/
+
 # Training outputs and model artifacts are intentionally not tracked.
 outputs/*
 !outputs/area_stats_subject_heldout_seed42.json
