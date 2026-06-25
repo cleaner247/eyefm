@@ -744,6 +744,11 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
     rank, world_size, _local_rank, device = setup_distributed(cfg)
     setup_logging(rank)
     set_seed(int(cfg["downstream_train"].get("seed", cfg["train"].get("seed", 42))) + rank)
+    # ── TF32: same free GEMM speedup as pretraining ──
+    if device.type == "cuda":
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.set_float32_matmul_precision("high")
     out_dir = output_dir_for(cfg, disease, mode)
     if rank == 0:
         ensure_dir(out_dir)
@@ -775,6 +780,8 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
     if world_size > 1:
         ddp_kwargs = {"device_ids": [device.index], "output_device": device.index} if device.type == "cuda" else {}
         model = DistributedDataParallel(model, **ddp_kwargs)
+        # ── DDP static graph: same reduction in autograd-callback gap as pretraining ──
+        model._set_static_graph()
     optimizer = build_optimizer(model, cfg)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and cfg["downstream_train"].get("precision") == "fp16")
     label_type = str(cfg.get("label", {}).get("type", "binary"))

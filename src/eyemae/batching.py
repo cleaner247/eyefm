@@ -22,6 +22,7 @@ class TokenBatchSampler(Sampler[list[int]]):
         infinite: bool = False,
         rank: int = 0,
         world_size: int = 1,
+        nmax_multiple: int = 0,
     ) -> None:
         self.dataset = dataset
         self.max_seq_tokens = int(max_seq_tokens)
@@ -35,12 +36,20 @@ class TokenBatchSampler(Sampler[list[int]]):
         self.rank = int(rank)
         self.world_size = int(world_size)
         self.epoch = 0
+        self.nmax_multiple = int(nmax_multiple)
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
 
     def _seq_tokens(self, idx: int) -> int:
         return 3 * max(1, int(self.dataset.get_num_patches(idx)))
+
+    def _round_up(self, patches: int) -> int:
+        """Round patch count up to nearest multiple of nmax_multiple."""
+        m = self.nmax_multiple
+        if m <= 1:
+            return max(1, int(patches))
+        return ((max(1, int(patches)) + m - 1) // m) * m
 
     def _padded_seq_tokens(self, batch_len: int, max_patches: int) -> int:
         return 3 * max(1, int(max_patches)) * max(1, int(batch_len))
@@ -57,7 +66,10 @@ class TokenBatchSampler(Sampler[list[int]]):
             ordered: list[int] = []
             for start in range(0, len(indices), bucket_size):
                 window = indices[start : start + bucket_size]
-                window.sort(key=self.dataset.get_num_patches)
+                if self.nmax_multiple > 1:
+                    window.sort(key=lambda i: self._round_up(self.dataset.get_num_patches(i)))
+                else:
+                    window.sort(key=self.dataset.get_num_patches)
                 ordered.extend(window)
             indices = ordered
         return indices
@@ -68,7 +80,8 @@ class TokenBatchSampler(Sampler[list[int]]):
         max_patches = 0
         for idx in self._ordered_indices(epoch):
             patches = max(1, int(self.dataset.get_num_patches(idx)))
-            next_max_patches = max(max_patches, patches)
+            eff = self._round_up(patches)
+            next_max_patches = max(max_patches, eff)
             next_tokens = self._padded_seq_tokens(len(batch) + 1, next_max_patches)
             would_overflow = batch and (
                 len(batch) >= self.max_trials or next_tokens > self.max_seq_tokens
