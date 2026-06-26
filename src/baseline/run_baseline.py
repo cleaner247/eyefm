@@ -138,14 +138,14 @@ def write_combined_summary(out_dir: Path, all_results: dict[str, dict[str, list[
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="EyeFM baseline runner (ML + DL).")
     parser.add_argument("--data-root", required=True, type=Path,
-                        help="Path to eyemae_fast_dataset_v2 root (must contain finetune/<task>/).")
+                        help="Path to eyemae_fast_dataset root (must contain finetune/<task>/).")
     parser.add_argument("--out-dir", required=True, type=Path,
                         help="Output directory for csv + summary.")
     parser.add_argument("--task", action="append", default=None,
-                        choices=["detox_binary", "pd_related_5class", "pd_binary"],
-                        help="Task to run. Repeatable. Default: both 2 task used in v4 HP search.")
+                        choices=["detox_binary", "pd_related_5class"],
+                        help="Task to run. Repeatable. Default: both 2 task.")
     parser.add_argument("--all", action="store_true",
-                        help="Run on all 3 tasks (detox_binary, pd_related_5class, pd_binary).")
+                        help="Run on all 2 tasks (detox_binary, pd_related_5class).")
     parser.add_argument("--skip-ml", action="store_true")
     parser.add_argument("--skip-dl", action="store_true")
     parser.add_argument("--dl-t-len", type=int, default=1024, help="T_LEN for DL archs.")
@@ -161,7 +161,7 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
     if args.all or not args.task:
-        tasks = ["detox_binary", "pd_related_5class", "pd_binary"]
+        tasks = ["detox_binary", "pd_related_5class"]
     else:
         tasks = list(args.task)
     LOGGER.info("Tasks: %s", tasks)
