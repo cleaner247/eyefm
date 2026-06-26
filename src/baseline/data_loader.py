@@ -89,13 +89,18 @@ def build_split_data(
 ) -> dict[str, SplitData]:
     """Build per-split SplitData dict for a downstream task."""
     label_map = get_label_map(task)
+    # `pd_related_5class` carries the 5-class label in `pd_disease_label`
+    # (-1 healthy, 0..3 disease grade); `detox_binary` / `pd_binary` use
+    # `health_label` (0 healthy, 1 disease). Reading the wrong field would
+    # silently collapse the label distribution to 2 classes.
+    label_field = "pd_disease_label" if task == "pd_related_5class" else "health_label"
     out: dict[str, SplitData] = {}
     for split in splits:
         rows = load_split(task, split, data_root)
         rows = _filter_task_rows(rows, saccade_tasks)
         out[split] = SplitData(
             rows=rows,
-            labels=[int(label_map.get(r.get("health_label", "0"), 0)) for r in rows],
+            labels=[int(label_map.get(r.get(label_field, r.get("health_label", "0")), 0)) for r in rows],
             subj_ids=[r.get("ml_subject_id", "") for r in rows],
             tasks=[r.get("task", "") for r in rows],
             frame_offsets=[int(r["frame_offset"]) for r in rows],

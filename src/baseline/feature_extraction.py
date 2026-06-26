@@ -317,6 +317,11 @@ def build_subject_feature_table(
         split_tags: (n_rows,) split name per row.
     """
     label_map = get_label_map(task)
+    # `pd_related_5class` carries the 5-class label in `pd_disease_label`
+    # (-1 healthy, 0..3 disease grade); `detox_binary` / `pd_binary` use
+    # `health_label` (0 healthy, 1 disease). Reading the wrong field would
+    # silently collapse the label distribution to 2 classes.
+    label_field = "pd_disease_label" if task == "pd_related_5class" else "health_label"
     X: list[list[float]] = []
     y: list[int] = []
     subj_ids: list[str] = []
@@ -335,7 +340,7 @@ def build_subject_feature_table(
                 label_str = "0"
                 for r in sub_rows:
                     if r.get("ml_subject_id") == subj:
-                        label_str = r.get("health_label") or r.get("label") or "0"
+                        label_str = r.get(label_field) or r.get("health_label") or r.get("label") or "0"
                         break
                 y.append(int(label_map.get(label_str, 0)))
                 subj_ids.append(subj)
