@@ -63,7 +63,7 @@ def get_label_map(task: str) -> dict[str, int]:
     """String label → int map per task."""
     if task == "pd_related_5class":
         return {"-1": 0, "0": 1, "1": 2, "2": 3, "3": 4}
-    if task in ("detox_binary", "pd_binary"):
+    if task in ("detox_binary", "pd_binary", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"):
         return {"0": 0, "1": 1}
     raise ValueError(f"Unknown task: {task}")
 

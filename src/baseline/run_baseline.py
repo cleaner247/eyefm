@@ -60,6 +60,7 @@ def run_one_task(
     dl_t_len: int = 1024,
     dl_epochs: int = 50,
     dl_archs: list[str] | None = None,
+    dl_gpu: int = 0,
 ) -> dict[str, list[dict]]:
     """Run both ML grid + DL 4-arch baselines for a single task; return dict of results."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -96,7 +97,7 @@ def run_one_task(
     if not skip_dl:
         LOGGER.info("=== TASK %s: DL 4-arch (50 epoch val-pick) ===", task)
         archs = dl_archs or ["TCN", "TimesNet", "NST", "CNNTransformer"]
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = torch.device(f"cuda:{dl_gpu}" if torch.cuda.is_available() else "cpu")
         dl_results = run_dl_task(
             task=task, data_root=data_root, out_dir=out_dir, archs=archs,
             t_len=dl_t_len, max_epochs=dl_epochs, device=device,
@@ -142,7 +143,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", required=True, type=Path,
                         help="Output directory for csv + summary.")
     parser.add_argument("--task", action="append", default=None,
-                        choices=["detox_binary", "pd_related_5class"],
+                        choices=["detox_binary", "pd_related_5class", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"],
                         help="Task to run. Repeatable. Default: both 2 task.")
     parser.add_argument("--all", action="store_true",
                         help="Run on all 2 tasks (detox_binary, pd_related_5class).")
@@ -153,6 +154,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dl-arch", action="append", default=None,
                         choices=["TCN", "TimesNet", "NST", "CNNTransformer"],
                         help="Restrict DL archs. Repeatable.")
+    parser.add_argument("--gpu", type=int, default=0, help="CUDA device index for DL (default 0)")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
@@ -161,7 +163,7 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
     if args.all or not args.task:
-        tasks = ["detox_binary", "pd_related_5class"]
+        tasks = ["detox_binary", "pd_related_5class", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"]
     else:
         tasks = list(args.task)
     LOGGER.info("Tasks: %s", tasks)
@@ -169,13 +171,18 @@ def main() -> None:
     if not args.data_root.exists():
         raise FileNotFoundError(f"data_root not found: {args.data_root}")
 
+    if torch.cuda.is_available():
+        torch.cuda.set_device(args.gpu)
+        LOGGER.info("DL device: cuda:%d (%s)", args.gpu, torch.cuda.get_device_name(args.gpu))
+    else:
+        LOGGER.warning("CUDA not available; DL will use CPU (slow).")
     all_results: dict[str, dict[str, list[dict]]] = {}
     for task in tasks:
         all_results[task] = run_one_task(
             task=task, data_root=args.data_root, out_dir=args.out_dir,
             skip_ml=args.skip_ml, skip_dl=args.skip_dl,
             dl_t_len=args.dl_t_len, dl_epochs=args.dl_epochs,
-            dl_archs=args.dl_arch,
+            dl_archs=args.dl_arch, dl_gpu=args.gpu,
         )
     write_combined_summary(args.out_dir, all_results)
     LOGGER.info("All done.")
