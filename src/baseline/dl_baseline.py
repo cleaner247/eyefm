@@ -489,11 +489,34 @@ def train_one_dl(
         model.load_state_dict(best_state)
     y_va, p_va, _ = _eval_batches(model, val_batches, val_ds, device, cfg.batch_size)
     y_te, p_te, _ = _eval_batches(model, test_batches, test_ds, device, cfg.batch_size)
-    return _compute_metrics_arr(y_va, p_va, n_classes), _compute_metrics_arr(y_te, p_te, n_classes)
+    va = _compute_metrics_arr(y_va, p_va, n_classes); te = _compute_metrics_arr(y_te, p_te, n_classes); return va, te, best_epoch, train_time
+
+
+def _bootstrap_auc_ci(y_true: np.ndarray, y_score: np.ndarray, n_boot: int = 1000, alpha: float = 0.05, seed: int = 42) -> tuple[float, float]:
+    """95% bootstrap CI for AUROC. Same algo as ml_baseline.bootstrap_auc_ci."""
+    rng = np.random.RandomState(seed)
+    n = len(y_true)
+    if n < 2:
+        return float("nan"), float("nan")
+    aucs = []
+    for _ in range(n_boot):
+        idx = rng.randint(0, n, n)
+        yt, ys = y_true[idx], y_score[idx]
+        if len(np.unique(yt)) < 2:
+            continue
+        try:
+            aucs.append(float(roc_auc_score(yt, ys)))
+        except Exception:
+            continue
+    if not aucs:
+        return float("nan"), float("nan")
+    lo = float(np.percentile(aucs, 100 * alpha / 2))
+    hi = float(np.percentile(aucs, 100 * (1 - alpha / 2)))
+    return lo, hi
 
 
 def _compute_metrics_arr(y_true: np.ndarray, probs: np.ndarray, n_classes: int) -> dict[str, float]:
-    """Same as ml_baseline.compute_metrics but takes numpy arrays directly."""
+    """Same as ml_baseline.compute_metrics but takes numpy arrays directly. Also adds AUROC CI for binary."""
     y_pred = probs.argmax(axis=1)
     out: dict[str, float] = {
         "n": int(len(y_true)),
@@ -506,8 +529,11 @@ def _compute_metrics_arr(y_true: np.ndarray, probs: np.ndarray, n_classes: int) 
     if n_classes == 2:
         try:
             out["auroc"] = float(roc_auc_score(y_true, probs[:, 1]))
+            out["auroc_ci_low"], out["auroc_ci_high"] = _bootstrap_auc_ci(y_true, probs[:, 1])
         except Exception:
             out["auroc"] = float("nan")
+            out["auroc_ci_low"] = float("nan")
+            out["auroc_ci_high"] = float("nan")
         try:
             tn, fp, fn, tp = confusion_matrix(y_true, y_pred, labels=[0, 1]).ravel()
         except ValueError:
@@ -527,10 +553,12 @@ def _compute_metrics_arr(y_true: np.ndarray, probs: np.ndarray, n_classes: int) 
     return out
 
 
+
 CSV_FIELDS = (
     "arch", "n_classes", "best_epoch", "best_val_score", "train_time_sec",
     "accuracy", "balanced_accuracy", "f1_macro", "f1_weighted", "cohen_kappa",
-    "auroc", "auroc_macro", "sensitivity", "specificity", "auc_mr",
+    "auroc", "auroc_macro", "auroc_ci_low", "auroc_ci_high",
+    "sensitivity", "specificity", "auc_mr",
 )
 
 
@@ -562,7 +590,7 @@ def run_dl_task(
                        max_epochs=max_epochs, batch_size=batch_size)
         model = make_model(arch, n_classes, t_len=t_len).to(device)
         try:
-            val_metrics, test_metrics = train_one_dl(
+            val_metrics, test_metrics, best_epoch, train_time = train_one_dl(
                 model, splits["train"], splits["validation"], splits["test"], cfg, device, shard_cache
             )
         except Exception as e:  # noqa: BLE001
@@ -571,9 +599,9 @@ def run_dl_task(
         row = {
             "arch": arch,
             "n_classes": n_classes,
-            "best_epoch": 0,
+            "best_epoch": best_epoch,
             "best_val_score": _select_metric(val_metrics, n_classes),
-            "train_time_sec": 0.0,
+            "train_time_sec": train_time,
             **{k: test_metrics.get(k, float("nan")) for k in CSV_FIELDS
                if k not in {"arch", "n_classes", "best_epoch", "best_val_score", "train_time_sec"}},
         }
