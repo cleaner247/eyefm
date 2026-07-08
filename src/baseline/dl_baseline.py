@@ -32,6 +32,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     balanced_accuracy_score,
     cohen_kappa_score,
     confusion_matrix,
@@ -530,6 +531,7 @@ def _compute_metrics_arr(y_true: np.ndarray, probs: np.ndarray, n_classes: int) 
         try:
             out["auroc"] = float(roc_auc_score(y_true, probs[:, 1]))
             out["auroc_ci_low"], out["auroc_ci_high"] = _bootstrap_auc_ci(y_true, probs[:, 1])
+            out["auprc"] = float(average_precision_score(y_true, probs[:, 1]))
         except Exception:
             out["auroc"] = float("nan")
             out["auroc_ci_low"] = float("nan")
@@ -558,6 +560,7 @@ CSV_FIELDS = (
     "arch", "n_classes", "best_epoch", "best_val_score", "train_time_sec",
     "accuracy", "balanced_accuracy", "f1_macro", "f1_weighted", "cohen_kappa",
     "auroc", "auroc_macro", "auroc_ci_low", "auroc_ci_high",
+    "auprc",
     "sensitivity", "specificity", "auc_mr",
 )
 

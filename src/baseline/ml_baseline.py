@@ -22,6 +22,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     accuracy_score,
+    average_precision_score,
     balanced_accuracy_score,
     cohen_kappa_score,
     confusion_matrix,
@@ -122,6 +123,10 @@ def compute_metrics(y_true: np.ndarray, probs: np.ndarray, n_classes: int) -> di
             out["auroc"] = float(roc_auc_score(y_true, probs[:, 1]))
         except Exception:
             out["auroc"] = float("nan")
+        try:
+            out["auprc"] = float(average_precision_score(y_true, probs[:, 1]))
+        except Exception:
+            out["auprc"] = float("nan")
         lo, hi = bootstrap_auc_ci(y_true, probs[:, 1])
         out["auroc_ci_low"] = lo
         out["auroc_ci_high"] = hi
@@ -261,10 +266,10 @@ def run_grid_search(
     return results
 
 
-CSV_FIELDS = (
-    "model", "hp", "n_classes", "train_time_sec", "val_score", "n",
+CSV_FIELDS = ("model", "hp", "n_classes", "train_time_sec", "val_score", "n",
     "accuracy", "balanced_accuracy", "f1_macro", "f1_weighted", "cohen_kappa",
     "auroc", "auroc_macro", "auroc_ci_low", "auroc_ci_high",
+        "auprc",
     "sensitivity", "specificity", "auc_mr",
 )
 
