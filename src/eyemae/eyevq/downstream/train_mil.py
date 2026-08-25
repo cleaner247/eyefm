@@ -2041,8 +2041,17 @@ def main() -> None:
     bf16 = bool(train_cfg.get("bf16", True))
     patience = int(train_cfg.get("early_stopping_patience_epochs", 10))
     early_stopping_min_epochs = int(train_cfg.get("early_stopping_min_epochs", 27))
+    periodic_test_every_epochs = int(
+        train_cfg.get("periodic_test_every_epochs", 0)
+    )
     if patience <= 0:
         raise ValueError("early_stopping_patience_epochs must be positive")
+    if periodic_test_every_epochs < 0:
+        raise ValueError("periodic_test_every_epochs must be non-negative")
+    if periodic_test_every_epochs > 0 and args.skip_test:
+        raise ValueError(
+            "periodic_test_every_epochs requires test evaluation to be enabled"
+        )
 
     if rank == 0:
         logger.info(
@@ -2479,6 +2488,66 @@ def main() -> None:
                 "sampler_audit": audit,
                 **val_metrics,
             })
+            if (
+                periodic_test_every_epochs > 0
+                and current_epoch % periodic_test_every_epochs == 0
+            ):
+                if test_loader is None:
+                    raise RuntimeError(
+                        "Periodic test evaluation requested without a test loader"
+                    )
+                periodic_test_metrics, periodic_test_rows = evaluate_subjects(
+                    raw_model,
+                    test_loader,
+                    device,
+                    split_name="test",
+                    threshold=0.5,
+                    bf16=bf16,
+                    subject_demographics=test_demographics,
+                    task_coverage_loss_weighting=task_coverage_loss_weighting,
+                )
+                periodic_dir = output_dir / "periodic_eval"
+                atomic_torch_save(
+                    checkpoint,
+                    periodic_dir / f"ckpt_epoch{current_epoch:03d}.pt",
+                )
+                write_prediction_csv(
+                    periodic_dir / f"predictions_val_epoch{current_epoch:03d}.csv",
+                    val_rows,
+                )
+                write_prediction_csv(
+                    periodic_dir / f"predictions_test_epoch{current_epoch:03d}.csv",
+                    periodic_test_rows,
+                )
+                write_json(
+                    periodic_dir / f"metrics_epoch{current_epoch:03d}.json",
+                    {
+                        "epoch": current_epoch,
+                        "step": global_step,
+                        "checkpoint": str(
+                            periodic_dir / f"ckpt_epoch{current_epoch:03d}.pt"
+                        ),
+                        "selection_policy": (
+                            "diagnostic_only; periodic test is never used for "
+                            "early stopping or checkpoint selection"
+                        ),
+                        "val": val_metrics,
+                        "test": periodic_test_metrics,
+                        "cfg": cfg,
+                        "run_identity": run_identity,
+                    },
+                )
+                logger.info(
+                    "Periodic diagnostic epoch=%d: val_%s=%.4f "
+                    "test_%s=%.4f (not used for selection)",
+                    current_epoch,
+                    selection_metric_name,
+                    val_auroc,
+                    selection_metric_name,
+                    periodic_test_metrics[
+                        f"test/subject/{selection_metric_name}"
+                    ],
+                )
             if current_epoch >= early_stopping_min_epochs and no_improve >= patience:
                 logger.info(
                     "Early stopping at epoch=%d step=%d: validation %s did "
