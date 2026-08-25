@@ -196,19 +196,23 @@ def _gaze_stimulus_to_packed(gaze: np.ndarray, stimulus: np.ndarray) -> tuple[np
     x[:, 8] = s[:, 2]
     x[:, 9] = s[:, 3]
 
-    y = np.empty((g.shape[0], 2), dtype=np.int8)
-    left_label = g[:, 6].copy()
-    right_label = g[:, 7].copy()
-    left_bad = ~np.isfinite(g[:, 0:3]).all(axis=1) | ~np.isfinite(left_label)
-    right_bad = ~np.isfinite(g[:, 3:6]).all(axis=1) | ~np.isfinite(right_label)
-    left_label[left_bad] = LABEL_MISSING
-    right_label[right_bad] = LABEL_MISSING
+    labels = g[:, [6, 7]]
+    if not np.isfinite(labels).all():
+        raise ValueError("gaze frame labels contain NaN or inf")
+    rounded_labels = np.rint(labels)
+    if not np.allclose(labels, rounded_labels, rtol=0.0, atol=1e-6):
+        raise ValueError("gaze frame labels must be integer-coded 0/1/2")
+    if ((rounded_labels < LABEL_VALID) | (rounded_labels > LABEL_MISSING)).any():
+        observed = sorted({float(value) for value in np.unique(rounded_labels)})
+        raise ValueError(f"gaze frame labels must be in 0/1/2, got {observed}")
+
+    y = rounded_labels.astype(np.int8, copy=False)
+    left_bad = ~np.isfinite(g[:, 0:3]).all(axis=1)
+    right_bad = ~np.isfinite(g[:, 3:6]).all(axis=1)
     x[left_bad, 0:3] = 0.0
     x[right_bad, 3:6] = 0.0
     if not np.isfinite(x).all():
         x = np.nan_to_num(x, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
-    y[:, 0] = np.clip(left_label, LABEL_VALID, LABEL_MISSING).astype(np.int8)
-    y[:, 1] = np.clip(right_label, LABEL_VALID, LABEL_MISSING).astype(np.int8)
     return x, y
 
 

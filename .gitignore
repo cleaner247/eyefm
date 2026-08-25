@@ -39,3 +39,17 @@ outputs/*
 # Optional local data folders
 data/
 datasets/
+
+# Delivered datasets, feature sidecars and binary reports are external inputs,
+# never source code. Small provenance manifests/scripts remain trackable.
+taskaware_*/
+taskaware_*.zip
+*.zip
+docs/*.pdf
+skills/
+
+# One-off local analysis entry points are intentionally not part of the formal
+# `scripts/run_eyevq_final.sh` surface.
+eval_checkpoint_last.py
+report.md
+problem.txt

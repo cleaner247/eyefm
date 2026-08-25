@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .patching import patchify_preprocessed_trial
-from .preprocess import load_area_stats, preprocess_trial
+from .preprocess import load_area_stats, preprocess_trial, validate_area_normalization_contract
 
 
 LOGGER = logging.getLogger(__name__)
@@ -118,6 +118,32 @@ def _as_bool(value: Any, default: bool = True) -> bool:
     if text in {"0", "false", "no", "n"}:
         return False
     return default
+
+
+def packed_row_has_usable_eye(row: dict[str, str]) -> bool:
+    """Return whether a packed-index trial has at least one retained eye.
+
+    ``left_final_keep``/``right_final_keep`` are authoritative when present;
+    legacy rows fall back to the D/L/R availability suffix.  Keeping this
+    predicate beside :class:`PackedTrialStore` guarantees tokenizer, BERT,
+    cache generation, and downstream finetuning use identical semantics.
+    """
+    suffix = row.get("source_suffix") or row.get("subject") or row.get("ml_subject_id")
+    availability = parse_eye_availability_suffix(suffix)
+    left = _as_bool(row.get("left_final_keep"), availability["left_available"])
+    right = _as_bool(row.get("right_final_keep"), availability["right_available"])
+    return left or right
+
+
+def filter_packed_rows_with_usable_eye(
+    rows: list[dict[str, str]],
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Split packed rows into retained and both-eyes-invalid trials."""
+    kept: list[dict[str, str]] = []
+    excluded: list[dict[str, str]] = []
+    for row in rows:
+        (kept if packed_row_has_usable_eye(row) else excluded).append(row)
+    return kept, excluded
 
 
 def _np_scalar_to_py(value: Any) -> Any:
@@ -233,12 +259,14 @@ def apply_nan_policy(trial: dict[str, Any], cfg: dict[str, Any]) -> dict[str, An
     for offset in (0, 4):
         feature_cols = [offset, offset + 1, offset + 2]
         label_col = offset + 3
-        feature_nan = np.isnan(eye[:, feature_cols]).any(axis=1)
         label_nan = np.isnan(eye[:, label_col])
-        mark = feature_nan | label_nan
-        if mark.any():
-            eye[mark, label_col] = missing_value
-            eye[mark, offset : offset + 3] = 0.0
+        if label_nan.any():
+            eye[label_nan, label_col] = missing_value
+        feature_nan = np.isnan(eye[:, feature_cols])
+        if feature_nan.any():
+            feature_values = eye[:, feature_cols]
+            feature_values[feature_nan] = 0.0
+            eye[:, feature_cols] = feature_values
     trial = dict(trial)
     trial["eye"] = eye
     fix_on = np.asarray(trial["fix_on"], dtype=np.float32).copy()
@@ -427,16 +455,21 @@ class PackedPretrainDataset(Dataset):
     def __init__(
         self,
         data_dir: str | Path,
-        index_file: str | Path,
         cfg: dict[str, Any],
         *,
+        index_file: str | Path | None = None,
         area_stats: dict[str, Any] | None = None,
         max_trials: int | None = None,
+        rows: list[dict[str, Any]] | None = None,
     ) -> None:
         self.data_dir = Path(data_dir)
         self.cfg = cfg
-        self.index_file = Path(index_file)
-        self.rows = read_packed_index(self.index_file)
+        if rows is not None:
+            self.rows = rows
+        elif index_file is not None:
+            self.rows = read_packed_index(Path(index_file))
+        else:
+            raise ValueError("Either index_file or rows must be provided")
         if max_trials is not None:
             self.rows = self.rows[: int(max_trials)]
         self.area_stats = area_stats if area_stats is not None else load_area_stats(cfg["area"]["stats_path"])
@@ -451,9 +484,11 @@ class PackedPretrainDataset(Dataset):
 
     def get_num_patches(self, index: int) -> int:
         row = self.rows[index]
-        if row.get("num_patches_20ms"):
+        samples = int(self.cfg["patch"]["samples"])
+        # num_patches_20ms column only matches the 20ms patch granularity
+        if samples == 20 and row.get("num_patches_20ms"):
             return int(row["num_patches_20ms"])
-        return int(row["frame_length"]) // int(self.cfg["patch"]["samples"])
+        return int(row["frame_length"]) // samples
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self.rows[index]
@@ -530,7 +565,7 @@ class TrialDataset(Dataset):
 
 def make_trial_dataset(cfg: dict[str, Any], split_file: str | Path, *, max_trials: int | None = None) -> Dataset:
     if cfg["data"].get("format") == "packed_mmap":
-        return PackedPretrainDataset(cfg["data"]["data_dir"], split_file, cfg, max_trials=max_trials)
+        return PackedPretrainDataset(cfg["data"]["data_dir"], cfg, index_file=split_file, max_trials=max_trials)
     return TrialDataset(cfg["data"]["data_dir"], split_file, cfg, max_trials=max_trials)
 
 
@@ -587,7 +622,9 @@ def collate_trials(items: list[dict[str, Any]]) -> dict[str, Any]:
     if not items:
         raise ValueError("empty batch")
     batch_size = len(items)
-    nmax = max(int(item["content"].shape[0]) for item in items)
+    raw_nmax = max(int(item["content"].shape[0]) for item in items)
+    # Round up to nearest multiple of 64 → only ~6 compile graphs (64,128,...,384).
+    nmax = min(((raw_nmax + 63) // 64) * 64, 384)
     patch = int(items[0]["content"].shape[2])
     content = torch.zeros(batch_size, nmax, 2, patch, 4, dtype=torch.float32)
     quality = torch.ones(batch_size, nmax, 2, patch, 1, dtype=torch.float32)

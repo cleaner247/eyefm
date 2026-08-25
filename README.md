@@ -1,126 +1,74 @@
-# EyeFM / EyeMAE
+# EyeVQ / EyeFM
 
-This repository contains the current EyeMAE/EyeFM pretraining and downstream
-fine-tuning code for 1000 Hz eye-movement trials.
+The canonical project path is `eyemae.eyevq`: discrete binocular tokenization,
+masked contextual pretraining, and subject-level multiple-instance fine-tuning.
+Legacy EyeMAE experiments remain reproducible, but they are not production
+defaults.
 
-Start from these documents:
-
-```text
-docs/pretrain_v3_plan.md
-docs/downstream_v3_plan.md
-docs/eyemae_fast_dataset_v2_current.md
-docs/eyemae_fast_dataset_v2_report.md
-```
-
-## Current Dataset
-
-The real dataset is not stored in Git. The current accepted local dataset is:
+## Canonical pipeline
 
 ```text
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2
+V4 packed trials
+  -> valid-eye filtering + per-subject/per-eye median-MAD area normalization
+  -> non-overlapping 40-sample stimulus/left/right patches
+  -> 12-layer joint stimulus-isolated tokenizer
+  -> tanh FSQ [9,7,5,5] and quantized reconstruction
+  -> SHA-bound offline code-ID cache
+  -> 12-layer paired-span factorized-code BERT
+  -> strict four-task subject MIL for MCI and PD5
 ```
 
-It is a packed-mmap dataset, not one `.npz` per trial. Current roots are:
+Stimulus queries read stimulus tokens only. They never read CLS or L/R; CLS and
+eye queries may read stimulus and eye tokens. BERT masks L/R together only when
+both patches contain at least 85% nonmissing frames.
 
-```text
-pretrain:
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/pretrain
+The single source of truth is:
 
-downstream:
-/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v2/finetune/<task>
-```
+- `configs/eyevq/final/recipe.yaml`: data contract, evidence status and gates.
+- `configs/eyevq/final/tokenizer.yaml`: tokenizer model and optimization.
+- `configs/eyevq/final/bert.yaml`: contextual pretraining.
+- `configs/eyevq/final/mci.yaml`: MCI K16 subject adaptation.
+- `configs/eyevq/final/pd5.yaml`: PD5 K4 subject adaptation.
 
-The current downstream task names are:
+V4 is the current validation-selected internal reference. Existing V5 and V6
+packed payloads are bitwise identical and inherit V5's additional guarded
+75-Hz filtering stage; they are experimental and are not silently treated as a
+raw/no-filter data revision.
 
-```text
-pd_related_5class
-pd_binary
-epilepsy_binary
-detox_binary
-migraine_binary
-ad_binary
-mci_binary
-mci_matched_binary
-```
+## Run
 
-## Setup
+Install and verify:
 
 ```bash
-cd eyefm
-pip install -e .
+python -m pip install -e '.[test]'
+PYTHONPATH=src pytest -q
+python -m compileall -q src/eyemae
 ```
 
-Run tests:
+Read-only preflight:
 
 ```bash
-pytest -q
+scripts/run_eyevq_final.sh --preflight-only
 ```
 
-## Pretraining
-
-The current v2 pretraining config is:
-
-```text
-configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml
-```
-
-Before formal v2 pretraining, compute v2 area stats:
+Detached four-GPU run:
 
 ```bash
-python -m eyemae.compute_area_stats \
-  --config configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml \
-  --split pretrain_train \
-  --out outputs/area_stats_fast_packed_v2_clean_full_subject_seed20260622.json
+CUDA_VISIBLE_DEVICES=0,1,2,3 \
+  OUTPUT_ROOT=outputs/eyevq/final \
+  scripts/run_eyevq_final.sh --detached
 ```
 
-Run v2 pretraining:
+The pipeline fails closed when the dataset contract, source hash, upstream
+checkpoint/cache identity, architecture invariants, or validation quality gate
+does not match. Checkpoints and large training outputs are never stored in Git.
 
-```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --standalone --nproc_per_node=4 \
-  -m eyemae.train \
-  --config configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml
-```
+## Documentation
 
-Evaluate:
+- Architecture and operational contract: `src/eyemae/eyevq/README.md`
+- Data lineage and experiment summary: `docs/eyevq_project_report_20260825.md`
+- Paper draft: `docs/iclr_eyevq_paper.md`
 
-```bash
-python -m eyemae.evaluate \
-  --config configs/v2_corrected_max30_oldpretrain/eyemae_cnn_512_12l_v2_clean.yaml \
-  --checkpoint outputs/pretrain_v2_clean/eyemae_cnn_512_12l_patch20_stimtoken/checkpoint_best.pt \
-  --split pretrain_test
-```
-
-## Downstream Fine-Tuning
-
-The current downstream queue is:
-
-```text
-configs/v2_corrected_max30_oldpretrain/queue.txt
-```
-
-It runs 8 downstream tasks times 4 modes:
-
-```text
-scratch
-linear_probe
-partial
-full
-```
-
-Run the queue on four GPUs:
-
-```bash
-python scripts/run_downstream_v3_queue.py \
-  --gpus 1,2,3,4 \
-  --config-list-file configs/v2_corrected_max30_oldpretrain/queue.txt \
-  --log-dir outputs/downstream_v2_corrected_max30_oldpretrain_logs/run_manual
-```
-
-The active corrected-v2 downstream run intentionally uses the v2 downstream
-dataset with the existing v3 pretrained checkpoint and old v3 area stats. This
-isolates the effect of data cleaning and split correction. A formal v2
-pretrain-to-finetune result requires recomputing v2 area stats, rerunning v2
-pretraining, then switching downstream configs to the v2 checkpoint and v2 area
-stats.
-
-Large training outputs and checkpoints are intentionally not tracked by Git.
+All reported test results are internal exploratory results because the test set
+was observed during model development. Automated selection and early stopping
+use validation data only.

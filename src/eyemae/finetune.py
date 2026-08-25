@@ -22,8 +22,14 @@ from .data import read_packed_index
 from .downstream_data import DownstreamTrialDataset, collate_downstream_trials
 from .downstream_data import PackedDownstreamDataset
 from .downstream_metrics import (
+    _apply_calibration_binary,
+    _apply_calibration_linear,
+    _fit_calibration_binary,
+    _fit_calibration_linear,
     aggregate_subject_predictions_multiclass,
     aggregate_subject_predictions,
+    aggregate_subject_by_task,
+    aggregate_subject_by_task_multiclass,
     binary_confusion_matrix,
     compute_binary_metrics,
     compute_multiclass_metrics,
@@ -33,8 +39,9 @@ from .downstream_metrics import (
     write_prediction_csv,
 )
 from .manifest import build_record_index
+from .masking import generate_mae_mask
 from .model import build_model
-from .pooling import eye_mean_pool
+from .pooling import eye_mean_pool, eye_separate_pool, eye_stim_separate_pool
 from .preprocess import load_area_stats
 from .train import autocast_context, cleanup_distributed, make_writer, move_batch_to_device, setup_distributed
 from .utils import atomic_torch_save, ensure_dir, read_json, set_seed, setup_logging, write_json
@@ -51,23 +58,33 @@ class DownstreamClassifier(nn.Module):
         head_cfg = cfg.get("downstream", {}).get("head", {})
         label_cfg = cfg.get("label", {})
         self.label_type = str(label_cfg.get("type", "binary"))
-        self.num_classes = int(label_cfg.get("num_classes", 2 if self.label_type == "binary" else 5))
-        out_dim = 1 if self.label_type == "binary" else self.num_classes
+        # pd_tremor_binary is treated as binary (1 output logit)
+        is_binary = self.label_type in ("binary", "pd_tremor_binary")
+        self.num_classes = int(label_cfg.get("num_classes", 2 if is_binary else 5))
+        out_dim = 1 if is_binary else self.num_classes
         hidden = int(head_cfg.get("hidden_dim", 256))
         dropout = float(head_cfg.get("dropout", cfg["model"].get("dropout", 0.0)))
+        self._separate_eyes = bool(head_cfg.get("separate_eyes", False))
+        self._separate_stim = bool(head_cfg.get("separate_stim", False))
+        if self._separate_stim:
+            head_in_dim = d_model * 3
+        elif self._separate_eyes:
+            head_in_dim = d_model * 2
+        else:
+            head_in_dim = d_model
         if hidden > 0:
             self.head = nn.Sequential(
-                nn.LayerNorm(d_model),
+                nn.LayerNorm(head_in_dim),
                 nn.Dropout(dropout),
-                nn.Linear(d_model, hidden),
+                nn.Linear(head_in_dim, hidden),
                 nn.GELU(),
                 nn.Dropout(dropout),
                 nn.Linear(hidden, out_dim),
             )
         else:
-            self.head = nn.Sequential(nn.LayerNorm(d_model), nn.Dropout(dropout), nn.Linear(d_model, out_dim))
+            self.head = nn.Sequential(nn.LayerNorm(head_in_dim), nn.Dropout(dropout), nn.Linear(head_in_dim, out_dim))
 
-    def forward(self, batch: dict[str, Any]) -> dict[str, torch.Tensor]:
+    def forward(self, batch: dict[str, Any], mae_mask: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         features = self.encoder.forward_features(
             batch["content"],
             batch["quality"],
@@ -75,15 +92,20 @@ class DownstreamClassifier(nn.Module):
             batch["task_id"],
             batch["pad_mask"],
             batch["eye_token_valid"],
-            mae_mask=None,
+            mae_mask=mae_mask,
         )
-        pooled, has_valid_eye_token, valid_token_count = eye_mean_pool(
-            features["hidden_eye"],
-            batch["eye_token_valid"],
-            batch["pad_mask"],
-        )
+        if self._separate_stim:
+            pooled, has_valid_eye_token, valid_token_count = eye_stim_separate_pool(
+                features["hidden_seq"], features["hidden_eye"],
+                batch["eye_token_valid"], batch["pad_mask"])
+        elif self._separate_eyes:
+            pooled, has_valid_eye_token, valid_token_count = eye_separate_pool(
+                features["hidden_eye"], batch["eye_token_valid"], batch["pad_mask"])
+        else:
+            pooled, has_valid_eye_token, valid_token_count = eye_mean_pool(
+                features["hidden_eye"], batch["eye_token_valid"], batch["pad_mask"])
         logits = self.head(pooled)
-        if self.label_type == "binary":
+        if self.label_type in ("binary", "pd_tremor_binary"):
             logits = logits.squeeze(-1)
         return {
             "logit": logits,
@@ -111,6 +133,13 @@ def count_parameters(model: nn.Module) -> dict[str, int]:
 def load_pretrained_encoder(model: DownstreamClassifier, checkpoint_path: str | Path) -> dict[str, Any]:
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state, skipped = extract_encoder_state_dict(checkpoint)
+    # Handle _orig_mod prefix from torch.compile
+    model_orig = any("_orig_mod" in k for k in model.encoder.state_dict())
+    ckpt_orig = any("_orig_mod" in k for k in state)
+    if model_orig and not ckpt_orig:
+        state = {"_orig_mod." + k: v for k, v in state.items()}
+    elif not model_orig and ckpt_orig:
+        state = {k.replace("_orig_mod.", ""): v for k, v in state.items()}
     missing, unexpected = model.encoder.load_state_dict(state, strict=False)
     allowed_missing = {key for key in model.encoder.state_dict() if key.startswith("pred_head.")}
     if unexpected:
@@ -506,6 +535,48 @@ def build_optimizer(model: DownstreamClassifier, cfg: dict[str, Any]) -> torch.o
     return torch.optim.AdamW(groups, betas=tuple(float(v) for v in train_cfg.get("betas", [0.9, 0.95])))
 
 
+def build_scheduler(
+    optimizer: torch.optim.Optimizer,
+    cfg: dict[str, Any],
+    steps_per_epoch: int,
+) -> torch.optim.lr_scheduler.LambdaLR | None:
+    """Create warmup + cosine annealing scheduler.
+
+    Reads from downstream_train:
+      - warmup_epochs (default 3): number of linear warmup epochs
+      - min_lr (default 1e-5): minimum LR after decay (as fraction of initial if < 1)
+      - cosine_decay_epochs: if set, cosine decays over this many epochs (else max_epochs - warmup_epochs)
+    """
+    train_cfg = cfg["downstream_train"]
+    warmup_epochs = int(train_cfg.get("warmup_epochs", 0))
+    max_epochs = int(train_cfg.get("max_epochs", 50))
+    min_lr = float(train_cfg.get("min_lr", 1e-5))
+    if warmup_epochs <= 0:
+        return None
+
+    warmup_steps = warmup_epochs * steps_per_epoch
+    cosine_decay_epochs = int(train_cfg.get("cosine_decay_epochs", max_epochs - warmup_epochs))
+    cosine_steps = max(1, cosine_decay_epochs * steps_per_epoch)
+    total_steps = warmup_steps + cosine_steps
+
+    # min_lr as ratio (if < 1.0 and > 0)
+    min_lr_ratio = min_lr if 0.0 < min_lr < 1.0 else None
+
+    def lr_lambda(step: int) -> float:
+        if step < warmup_steps:
+            # linear warmup from 0 to 1
+            return step / max(1, warmup_steps)
+        # cosine annealing from 1 to min_lr_ratio
+        progress = (step - warmup_steps) / max(1, cosine_steps - 1)
+        progress = min(progress, 1.0)
+        cos_val = 0.5 * (1.0 + math.cos(math.pi * progress))
+        if min_lr_ratio is not None:
+            return min_lr_ratio + (1.0 - min_lr_ratio) * cos_val
+        return cos_val
+
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+
+
 @torch.no_grad()
 def evaluate_classifier(
     model: DownstreamClassifier,
@@ -773,9 +844,11 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
         write_json(out_dir / "param_counts.json", param_counts)
         LOGGER.info("%s/%s parameters: %s", disease, mode, param_counts)
     if world_size > 1:
-        ddp_kwargs = {"device_ids": [device.index], "output_device": device.index} if device.type == "cuda" else {}
+        ddp_kwargs = {"device_ids": [device.index], "output_device": device.index, "find_unused_parameters": True} if device.type == "cuda" else {}
         model = DistributedDataParallel(model, **ddp_kwargs)
     optimizer = build_optimizer(model, cfg)
+    steps_per_epoch = len(loaders["train"])
+    scheduler = build_scheduler(optimizer, cfg, steps_per_epoch)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda" and cfg["downstream_train"].get("precision") == "fp16")
     label_type = str(cfg.get("label", {}).get("type", "binary"))
     num_classes = int(cfg.get("label", {}).get("num_classes", 2 if label_type == "binary" else 5))
@@ -836,8 +909,12 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
                     break
                 batch = move_batch_to_device(batch, device)
                 optimizer.zero_grad(set_to_none=True)
+                # MAE-style random masking during training (configurable)
+                use_mae_mask = bool(cfg.get("downstream", {}).get("use_mae_mask", False))
+                mae_mask_tuple = generate_mae_mask(batch, cfg) if use_mae_mask else (None, None)
+                mae_mask = mae_mask_tuple[0]
                 with autocast_context(device, precision):
-                    out = model(batch)
+                    out = model(batch, mae_mask=mae_mask)
                     if label_type == "multiclass":
                         loss, loss_den = weighted_cross_entropy_loss(
                             out["logit"],
@@ -866,6 +943,9 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
                     loss.backward()
                     torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
                     optimizer.step()
+                # Per-step lr scheduler (warmup + cosine)
+                if scheduler is not None:
+                    scheduler.step()
                 loss_sum += float(loss.detach().cpu()) * float(loss_den.detach().cpu())
                 loss_den_sum += float(loss_den.detach().cpu())
                 if rank == 0 and global_step % int(cfg["downstream_train"].get("log_every_steps", 50)) == 0:
@@ -907,6 +987,10 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
             metric_value, used_monitor, used_fallback = _select_monitor_value(epoch_metrics, monitor)
             if rank == 0 and used_fallback:
                 LOGGER.warning("%s is NaN; using fallback monitor %s", monitor, used_monitor)
+            # Log current lr after each epoch
+            if scheduler is not None and rank == 0:
+                current_lrs = [float(group["lr"]) for group in optimizer.param_groups]
+                LOGGER.info("%s/%s epoch=%s lr=%s", disease, mode, epoch, [f"{lr:.2e}" for lr in current_lrs])
             if rank == 0 and epoch == 0:
                 save_downstream_checkpoint(
                     out_dir / "checkpoint_epoch_000.pt",
@@ -997,7 +1081,10 @@ def train_downstream(cfg: dict[str, Any], *, disease: str, mode: str, resume: st
             checkpoint = torch.load(best_path, map_location="cpu", weights_only=False)
             raw_model = model.module if isinstance(model, DistributedDataParallel) else model
             raw_model.load_state_dict(checkpoint["model"])
+        elif rank == 0:
+            LOGGER.warning("checkpoint_best.pt not found, evaluating current model state")
         final_metrics: dict[str, Any] = {"best_epoch": best_epoch, "best_metric": best_metric}
+        all_results: dict[str, tuple] = {}
         for split in cfg["downstream_eval"].get("evaluate_splits", ["train", "val", "test"]):
             metrics, rows, subject_rows = evaluate_classifier(
                 model,

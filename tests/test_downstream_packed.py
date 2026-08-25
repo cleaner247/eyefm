@@ -6,7 +6,17 @@ from pathlib import Path
 import numpy as np
 
 from eyemae.config import load_config
+from eyemae.data import filter_packed_rows_with_usable_eye, packed_row_has_usable_eye
 from eyemae.downstream_data import PackedDownstreamDataset, collate_downstream_trials
+
+
+def test_packed_downstream_patch_count_respects_configured_patch_size() -> None:
+    dataset = object.__new__(PackedDownstreamDataset)
+    dataset.rows = [{"frame_length": "80", "num_patches_20ms": "4"}]
+    dataset.cfg = {"patch": {"samples": 40}}
+    assert dataset.get_num_patches(0) == 2
+    dataset.cfg = {"patch": {"samples": 20}}
+    assert dataset.get_num_patches(0) == 4
 
 
 def _write_packed_fixture(root: Path, rows: list[dict[str, str]]) -> Path:
@@ -36,8 +46,8 @@ def _write_packed_fixture(root: Path, rows: list[dict[str, str]]) -> Path:
                 "num_patches_20ms": "2",
                 "task_id": "0",
                 "source_suffix": "D",
-                "left_final_keep": "True",
-                "right_final_keep": "True",
+                "left_final_keep": row.get("left_final_keep", "True"),
+                "right_final_keep": row.get("right_final_keep", "True"),
             }
         )
     index = root / "index.csv"
@@ -93,6 +103,37 @@ def test_packed_downstream_binary_dataset(tmp_path: Path) -> None:
     batch = collate_downstream_trials([dataset[0], item])
     assert batch["label"].shape == (2,)
     assert batch["ml_subject_id"] == ["s0", "s1"]
+
+
+def test_packed_downstream_filters_trials_with_no_usable_eye(tmp_path: Path) -> None:
+    index = _write_packed_fixture(
+        tmp_path,
+        [
+            {"global_trial_id": "good", "ml_subject_id": "s0", "subject": "s0", "trial_id": "t0", "health_label": "0", "pd_disease_label": "-1"},
+            {"global_trial_id": "bad", "ml_subject_id": "s1", "subject": "s1", "trial_id": "t1", "health_label": "1", "pd_disease_label": "-1", "left_final_keep": "False", "right_final_keep": "False"},
+        ],
+    )
+    cfg = _cfg(tmp_path, {"type": "binary", "task_name": "mci_binary"})
+    cfg["data"]["require_any_eye_keep"] = True
+    dataset = PackedDownstreamDataset(tmp_path, index, cfg)
+    assert len(dataset) == 1
+    assert dataset.rows[0]["global_trial_id"] == "good"
+    assert dataset.num_rows_before_eye_filter == 2
+    assert [row["global_trial_id"] for row in dataset.excluded_no_usable_eye_rows] == ["bad"]
+
+
+def test_shared_packed_eye_filter_uses_keep_flags_and_suffix_fallback() -> None:
+    rows = [
+        {"global_trial_id": "both", "source_suffix": "D", "left_final_keep": "True", "right_final_keep": "True"},
+        {"global_trial_id": "left", "source_suffix": "L", "left_final_keep": "", "right_final_keep": ""},
+        {"global_trial_id": "bad", "source_suffix": "D", "left_final_keep": "False", "right_final_keep": "False"},
+    ]
+    assert packed_row_has_usable_eye(rows[0])
+    assert packed_row_has_usable_eye(rows[1])
+    assert not packed_row_has_usable_eye(rows[2])
+    kept, excluded = filter_packed_rows_with_usable_eye(rows)
+    assert [row["global_trial_id"] for row in kept] == ["both", "left"]
+    assert [row["global_trial_id"] for row in excluded] == ["bad"]
 
 
 def test_packed_downstream_pd_multiclass_labels(tmp_path: Path) -> None:

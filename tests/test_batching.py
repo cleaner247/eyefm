@@ -76,6 +76,21 @@ def test_token_batch_sampler_infinite_ddp_ranks_do_not_exhaust() -> None:
             assert _tokens(dataset, batch) <= 30
 
 
+def test_token_batch_sampler_resume_skips_consumed_infinite_batches() -> None:
+    dataset = FakeLengthDataset([1, 2, 3, 4, 5, 6, 7])
+    kwargs = dict(
+        max_seq_tokens=10_000,
+        max_trials=2,
+        shuffle=True,
+        seed=17,
+        infinite=True,
+    )
+    uninterrupted = list(islice(TokenBatchSampler(dataset, **kwargs), 14))
+    resumed = TokenBatchSampler(dataset, **kwargs)
+    resumed.set_start_batch(7)
+    assert list(islice(resumed, 7)) == uninterrupted[7:14]
+
+
 def test_token_batch_sampler_budget_counts_padding() -> None:
     dataset = FakeLengthDataset([1, 10, 1])
     sampler = TokenBatchSampler(

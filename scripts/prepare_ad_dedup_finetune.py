@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import random
 from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,14 @@ import yaml
 DEFAULT_DATA_DIR = Path("/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v1")
 DEFAULT_SOURCE_VIEW = "AD"
 DEFAULT_TARGET_VIEW = "AD_dedup_rawsubject"
+DEFAULT_SEED = 20260622
+DEFAULT_TRAIN_RATIO = 0.64
+DEFAULT_VAL_RATIO = 0.16
+DEFAULT_TEST_RATIO = 0.20
 CONFLICT_CONTROL_SUBJECTS = {"GaoLianYing"}
 MODES = ("scratch", "linear_probe", "partial", "full")
+PRESERVE_SPLIT_POLICY = "preserve_source_split_after_raw_trial_dedup"
+RANDOM_SPLIT_POLICY = "random_raw_subject_stratified"
 
 
 def read_csv(path: Path) -> tuple[list[dict[str, str]], list[str]]:
@@ -67,6 +74,88 @@ def split_rows(rows: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
     rows_by_split = {"train": [], "validation": [], "test": []}
     for row in rows:
         rows_by_split[row["split"]].append(row)
+    for split_rows_ in rows_by_split.values():
+        split_rows_.sort(key=lambda item: item["global_trial_id"])
+    return rows_by_split
+
+
+def split_counts(n: int, train_ratio: float, val_ratio: float, test_ratio: float) -> tuple[int, int, int]:
+    raw = {
+        "train": n * train_ratio,
+        "validation": n * val_ratio,
+        "test": n * test_ratio,
+    }
+    counts = {key: int(value) for key, value in raw.items()}
+    remaining = n - sum(counts.values())
+    for key, _ in sorted(raw.items(), key=lambda item: item[1] - int(item[1]), reverse=True):
+        if remaining <= 0:
+            break
+        counts[key] += 1
+        remaining -= 1
+    if n >= 3:
+        for key in ("train", "validation", "test"):
+            if counts[key] == 0:
+                donor = max(counts, key=lambda item: counts[item])
+                counts[donor] -= 1
+                counts[key] += 1
+    return counts["train"], counts["validation"], counts["test"]
+
+
+def health_label(row: dict[str, str]) -> int:
+    label = int(row["health_label"])
+    if label not in {0, 1}:
+        raise ValueError(f"Invalid AD health_label={label} for row {row.get('global_trial_id')}")
+    return label
+
+
+def make_raw_subject_split(
+    rows: list[dict[str, str]],
+    *,
+    seed: int,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
+) -> dict[str, str]:
+    subject_labels: dict[str, int] = {}
+    by_label: dict[int, list[str]] = defaultdict(list)
+    for row in rows:
+        subject = row["subject"]
+        label = health_label(row)
+        previous = subject_labels.get(subject)
+        if previous is not None and previous != label:
+            raise ValueError(f"Raw subject has conflicting AD labels: {subject}: {previous} vs {label}")
+        if previous is None:
+            subject_labels[subject] = label
+    for subject, label in subject_labels.items():
+        by_label[label].append(subject)
+
+    rng = random.Random(seed)
+    assignment: dict[str, str] = {}
+    for label, subjects in sorted(by_label.items()):
+        shuffled = list(subjects)
+        rng.shuffle(shuffled)
+        n_train, n_val, _n_test = split_counts(len(shuffled), train_ratio, val_ratio, test_ratio)
+        split_names = ["train"] * n_train + ["validation"] * n_val + ["test"] * (
+            len(shuffled) - n_train - n_val
+        )
+        for subject, split in zip(shuffled, split_names):
+            assignment[subject] = split
+    return assignment
+
+
+def split_rows_by_assignment(
+    rows: list[dict[str, str]],
+    *,
+    assignment: dict[str, str],
+    target_view: str,
+) -> dict[str, list[dict[str, str]]]:
+    rows_by_split = {"train": [], "validation": [], "test": []}
+    for row in rows:
+        out = dict(row)
+        split = assignment[out["subject"]]
+        out["split"] = split
+        out["view"] = target_view
+        rows_by_split[split].append(out)
     for split_rows_ in rows_by_split.values():
         split_rows_.sort(key=lambda item: item["global_trial_id"])
     return rows_by_split
@@ -128,8 +217,23 @@ def audit_rows(rows_by_split: dict[str, list[dict[str, str]]]) -> dict[str, Any]
 
 
 def summarize(rows_by_split: dict[str, list[dict[str, str]]], extra: dict[str, Any]) -> dict[str, Any]:
+    ml_subject_sets = {split: {row["ml_subject_id"] for row in rows} for split, rows in rows_by_split.items()}
+    raw_subject_sets = {split: {row["subject"] for row in rows} for split, rows in rows_by_split.items()}
+    subject_overlap_counts = {
+        "test_train": len(ml_subject_sets["test"] & ml_subject_sets["train"]),
+        "test_validation": len(ml_subject_sets["test"] & ml_subject_sets["validation"]),
+        "train_validation": len(ml_subject_sets["train"] & ml_subject_sets["validation"]),
+    }
+    raw_subject_overlap_counts = {
+        "test_train": len(raw_subject_sets["test"] & raw_subject_sets["train"]),
+        "test_validation": len(raw_subject_sets["test"] & raw_subject_sets["validation"]),
+        "train_validation": len(raw_subject_sets["train"] & raw_subject_sets["validation"]),
+    }
     summary: dict[str, Any] = {
         **extra,
+        "no_subject_overlap": all(value == 0 for value in subject_overlap_counts.values()),
+        "subject_overlap_counts": subject_overlap_counts,
+        "raw_subject_overlap_counts": raw_subject_overlap_counts,
         "splits": {},
         "audit": audit_rows(rows_by_split),
     }
@@ -159,6 +263,11 @@ def build_ad_dedup_view(
     source_view: str,
     target_view: str,
     force: bool,
+    split_policy: str,
+    seed: int,
+    train_ratio: float,
+    val_ratio: float,
+    test_ratio: float,
 ) -> dict[str, Any]:
     rows, fieldnames = load_view_rows(data_dir, source_view)
     original_patient_rows = [
@@ -197,7 +306,32 @@ def build_ad_dedup_view(
         out["view"] = target_view
         kept_rows.append(out)
 
-    rows_by_split = split_rows(kept_rows)
+    if split_policy == PRESERVE_SPLIT_POLICY:
+        rows_by_split = split_rows(kept_rows)
+        split_metadata: dict[str, Any] = {}
+    elif split_policy == RANDOM_SPLIT_POLICY:
+        ratio_sum = train_ratio + val_ratio + test_ratio
+        if abs(ratio_sum - 1.0) > 1e-6:
+            raise ValueError(f"Split ratios must sum to 1, got {ratio_sum}")
+        assignment = make_raw_subject_split(
+            kept_rows,
+            seed=seed,
+            train_ratio=train_ratio,
+            val_ratio=val_ratio,
+            test_ratio=test_ratio,
+        )
+        rows_by_split = split_rows_by_assignment(
+            kept_rows,
+            assignment=assignment,
+            target_view=target_view,
+        )
+        split_metadata = {
+            "seed": seed,
+            "ratios": {"train": train_ratio, "validation": val_ratio, "test": test_ratio},
+        }
+    else:
+        raise ValueError(f"Unknown split_policy={split_policy}")
+
     target_dir = data_dir / "downstream" / target_view
     if target_dir.exists() and not force:
         raise FileExistsError(f"Target view already exists; pass --force to overwrite: {target_dir}")
@@ -209,7 +343,7 @@ def build_ad_dedup_view(
         {
             "source_view": source_view,
             "target_view": target_view,
-            "split_policy": "preserve_source_split_after_raw_trial_dedup",
+            "split_policy": split_policy,
             "dedup_rule": {
                 "matched_experimental": "drop because every raw trial is contained in AD组/患病",
                 "matched_control_conflicts": sorted(CONFLICT_CONTROL_SUBJECTS),
@@ -223,6 +357,7 @@ def build_ad_dedup_view(
                 "matched_experimental_rows": len(matched_exp_rows),
                 "matched_experimental_unmatched_rows": len(unmatched_exp_rows),
             },
+            **split_metadata,
         },
     )
     (target_dir / "split_summary.json").write_text(
@@ -241,22 +376,44 @@ def mode_output_name(mode: str) -> str:
     }[mode]
 
 
-def update_ad_configs(*, target_view: str, output_root: Path) -> list[Path]:
+def downstream_task_name(target_view: str) -> str:
+    normalized = target_view.lower()
+    if normalized.startswith("ad_binary_"):
+        return normalized
+    if normalized.startswith("ad_"):
+        normalized = normalized[len("ad_") :]
+    return f"ad_binary_{normalized}"
+
+
+def update_ad_configs(
+    *,
+    target_view: str,
+    output_root: Path,
+    seed: int | None,
+    ratios: dict[str, float] | None,
+) -> list[Path]:
     written: list[Path] = []
+    task_name = downstream_task_name(target_view)
     for mode in MODES:
         path = Path("configs/downstream") / f"ad_binary_{mode}.yaml"
         cfg = yaml.safe_load(path.read_text(encoding="utf-8"))
-        cfg["experiment"]["name"] = f"downstream_v3_fast_ad_binary_dedup_rawsubject_{mode}"
+        cfg["experiment"]["name"] = f"downstream_v3_fast_{task_name}_{mode}"
         cfg["experiment"]["output_dir"] = str(output_root / mode_output_name(mode))
         cfg["data"]["train_index"] = f"downstream/{target_view}/train.csv"
         cfg["data"]["val_index"] = f"downstream/{target_view}/validation.csv"
         cfg["data"]["test_index"] = f"downstream/{target_view}/test.csv"
         cfg["data"]["subject_key"] = "subject"
+        if seed is not None:
+            cfg["split"]["seed"] = seed
+        if ratios is not None:
+            cfg["split"]["train_ratio"] = ratios["train"]
+            cfg["split"]["val_ratio"] = ratios["validation"]
+            cfg["split"]["test_ratio"] = ratios["test"]
         cfg["split"]["subject_key"] = "subject"
         cfg["split"]["split_summary"] = f"downstream/{target_view}/split_summary.json"
         cfg["label"]["view"] = target_view
-        cfg["downstream"]["task_name"] = "ad_binary_dedup_rawsubject"
-        cfg["downstream"]["disease"] = "ad_binary_dedup_rawsubject"
+        cfg["downstream"]["task_name"] = task_name
+        cfg["downstream"]["disease"] = task_name
         path.write_text(yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True), encoding="utf-8")
         written.append(path)
     return written
@@ -267,6 +424,15 @@ def main() -> int:
     parser.add_argument("--data-dir", type=Path, default=DEFAULT_DATA_DIR)
     parser.add_argument("--source-view", default=DEFAULT_SOURCE_VIEW)
     parser.add_argument("--target-view", default=DEFAULT_TARGET_VIEW)
+    parser.add_argument(
+        "--split-policy",
+        choices=(PRESERVE_SPLIT_POLICY, RANDOM_SPLIT_POLICY),
+        default=PRESERVE_SPLIT_POLICY,
+    )
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
+    parser.add_argument("--train-ratio", type=float, default=DEFAULT_TRAIN_RATIO)
+    parser.add_argument("--val-ratio", type=float, default=DEFAULT_VAL_RATIO)
+    parser.add_argument("--test-ratio", type=float, default=DEFAULT_TEST_RATIO)
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--update-configs", action="store_true")
     parser.add_argument(
@@ -281,10 +447,20 @@ def main() -> int:
         source_view=args.source_view,
         target_view=args.target_view,
         force=args.force,
+        split_policy=args.split_policy,
+        seed=args.seed,
+        train_ratio=args.train_ratio,
+        val_ratio=args.val_ratio,
+        test_ratio=args.test_ratio,
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     if args.update_configs:
-        written = update_ad_configs(target_view=args.target_view, output_root=args.output_root)
+        written = update_ad_configs(
+            target_view=args.target_view,
+            output_root=args.output_root,
+            seed=summary.get("seed"),
+            ratios=summary.get("ratios"),
+        )
         print("updated_configs")
         for path in written:
             print(path)

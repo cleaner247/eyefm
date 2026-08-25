@@ -1,0 +1,42 @@
+recipe_version: 1
+status: validation_selected_internal_reference
+selection_policy: validation_only
+test_status: historically_observed_internal_exploration
+
+dataset:
+  version: eyemae_fast_dataset_v4
+  root: /mnt/disk_sde/hjf/eyemae_fast_dataset_v4
+  shared_artifacts: outputs/eyevq/v4_shared
+  manifest_sha256: ae46fe82f2821e6c5e4040aed96555e24862bc6184e8f26a103fc4e79aaec14b
+  build_audit: /mnt/disk_sde/hjf/eyemae_fast_dataset_v4/v4_all_highfreq_area_filter_summary.json
+  build_audit_sha256: dcc2487d292716bca560e8e8cb17403c7d6ab858760d23b41d3add7da04f2134
+  rationale: >-
+    V4 is the latest data version with completed comparable validation evidence
+    for both MCI and PD5. Current V5 and V6 payloads are identical and inherit
+    an additional guarded 75-Hz filtering stage, so they remain experimental
+    until a direct-from-delivery dataset is rebuilt and revalidated.
+
+architecture:
+  tokenizer: joint_stimulus_isolated_self_attention
+  stimulus_reads_cls: false
+  fsq_levels: [9, 7, 5, 5]
+  bert_target: factorized_fsq_cross_entropy
+  bert_mask: paired_valid_only_span_1_to_5_uniform_ratio_0.60
+  mci_aggregation: strict_four_task_k16_shared_logit_mean
+  pd5_aggregation: strict_four_task_k4_shared_logit_mean
+
+quality_gates:
+  tokenizer:
+    max_val_eye_loss: 0.00035
+    max_val_feature_loss: 0.12
+    min_active_codes: 1200
+    min_code_perplexity: 500
+    max_top1_code_frequency: 0.03
+  bert:
+    max_val_loss: 3.0
+    min_exact_code_accuracy: 0.25
+    min_per_dimension_accuracy: 0.60
+
+downstream:
+  seeds: [42, 43, 44]
+  test_used_for_selection: false

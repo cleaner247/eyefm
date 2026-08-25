@@ -8,7 +8,15 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from .data import PackedTrialStore, collate_trials, load_npz_trial, read_packed_index, read_split_file
+from .data import (
+    PackedTrialStore,
+    collate_trials,
+    filter_packed_rows_with_usable_eye,
+    load_npz_trial,
+    packed_row_has_usable_eye,
+    read_packed_index,
+    read_split_file,
+)
 from .manifest import TrialRecord, build_record_index, scan_trial_records
 from .patching import patchify_preprocessed_trial
 from .preprocess import load_area_stats, preprocess_trial
@@ -71,16 +79,7 @@ def summarize_downstream_records(records: list[TrialRecord]) -> dict[str, Any]:
 
 
 def apply_final_keep_to_trial(trial: dict[str, Any], record: TrialRecord, cfg: dict[str, Any]) -> dict[str, Any]:
-    eye = np.asarray(trial["eye"], dtype=np.float32).copy()
-    missing_value = float(cfg["label"]["missing_value"])
-    if not record.left_final_keep:
-        eye[:, 0:3] = 0.0
-        eye[:, 3] = missing_value
-    if not record.right_final_keep:
-        eye[:, 4:7] = 0.0
-        eye[:, 7] = missing_value
     out = dict(trial)
-    out["eye"] = eye
     out["subject_id"] = record.subject_id
     out["task_id"] = np.asarray(record.task_id, dtype=np.int64)
     out["trial_id"] = record.trial_id
@@ -185,10 +184,27 @@ def packed_downstream_label(row: dict[str, str], cfg: dict[str, Any]) -> int:
         if pd_label not in {0, 1, 2, 3}:
             raise ValueError(f"pd_disease_label must be 0..3 for patient row {row.get('global_trial_id')}, got {pd_label}")
         class_id = pd_label + 1
+        # Optional label remapping (applied before range check)
+        remap = label_cfg.get("remap", None)
+        if remap is not None:
+            class_id = int(remap.get(str(class_id), class_id))
         num_classes = int(label_cfg.get("num_classes", 5))
+        if class_id == -1:
+            return -1  # excluded by remap
         if class_id < 0 or class_id >= num_classes:
             raise ValueError(f"class_id out of range for {row.get('global_trial_id')}: {class_id}")
         return class_id
+    if label_type == "pd_tremor_binary":
+        # Only patients: PD (pd_label=0) vs Tremor (pd_label=1,2), exclude dyskinesia (pd_label=3)
+        if health == 0:
+            return -1  # exclude healthy
+        pd_label = int(row.get("pd_disease_label", ""))
+        if pd_label == 0:
+            return 1  # PD
+        elif pd_label in {1, 2}:
+            return 0  # Tremor + ET
+        else:
+            return -1  # exclude dyskinesia
     raise ValueError(f"Unsupported label.type: {label_type}")
 
 
@@ -209,6 +225,16 @@ class PackedDownstreamDataset(Dataset):
         self.rows = read_packed_index(self.index_file)
         if max_trials is not None:
             self.rows = self.rows[: int(max_trials)]
+        self.num_rows_before_eye_filter = len(self.rows)
+        self.excluded_no_usable_eye_rows: list[dict[str, str]] = []
+        if bool(cfg["data"].get("require_any_eye_keep", True)):
+            self.rows, self.excluded_no_usable_eye_rows = (
+                filter_packed_rows_with_usable_eye(self.rows)
+            )
+            if not self.rows:
+                raise ValueError(
+                    f"Packed downstream index has no trial with a usable eye: {self.index_file}"
+                )
         self.area_stats = area_stats if area_stats is not None else load_area_stats(cfg["area"]["stats_path"])
         self.store = PackedTrialStore(
             self.data_dir,
@@ -219,15 +245,24 @@ class PackedDownstreamDataset(Dataset):
             train_subject_trial_counts = dict(Counter(row["ml_subject_id"] for row in self.rows))
         self.train_subject_trial_counts = train_subject_trial_counts
         self.labels = [packed_downstream_label(row, cfg) for row in self.rows]
+        # Filter out excluded trials (label = -1)
+        keep = [i for i, lbl in enumerate(self.labels) if lbl >= 0]
+        if len(keep) < len(self.labels):
+            self.rows = [self.rows[i] for i in keep]
+            self.labels = [self.labels[i] for i in keep]
 
     def __len__(self) -> int:
         return len(self.rows)
 
     def get_num_patches(self, index: int) -> int:
         row = self.rows[index]
-        if row.get("num_patches_20ms"):
+        samples = int(self.cfg["patch"]["samples"])
+        # The packed index stores this convenience value specifically for
+        # 20-sample patches.  Reusing it for the formal 40-sample EyeVQ path
+        # overestimates sequence length by two and silently shrinks batches.
+        if samples == 20 and row.get("num_patches_20ms"):
             return int(row["num_patches_20ms"])
-        return int(row["frame_length"]) // int(self.cfg["patch"]["samples"])
+        return int(row["frame_length"]) // samples
 
     def __getitem__(self, index: int) -> dict[str, Any]:
         row = self.rows[index]

@@ -43,7 +43,7 @@ def test_split_txt_ignores_comments(tmp_path: Path) -> None:
     assert read_split_file(path) == ["a.npz", "b.npz"]
 
 
-def test_nan_policy_can_mark_missing(tmp_path: Path) -> None:
+def test_nan_policy_zeroes_feature_nan_without_relabeling(tmp_path: Path) -> None:
     cfg = load_config("configs/debug.yaml")
     cfg["data"]["nan_policy"] = "mark_missing"
     path = tmp_path / "trial.npz"
@@ -52,8 +52,10 @@ def test_nan_policy_can_mark_missing(tmp_path: Path) -> None:
         payload = {k: z[k] for k in z.files}
     eye = payload["eye"].copy()
     eye[0, 0] = np.nan
+    eye[1, 3] = np.nan
     payload["eye"] = eye
     np.savez(path, **payload)
     trial = load_npz_trial(path, tmp_path, cfg)
-    assert trial["eye"][0, 3] == cfg["label"]["missing_value"]
+    assert trial["eye"][0, 3] == cfg["label"]["nonblink_value"]
     assert trial["eye"][0, 0] == 0.0
+    assert trial["eye"][1, 3] == cfg["label"]["missing_value"]

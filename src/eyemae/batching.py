@@ -35,9 +35,21 @@ class TokenBatchSampler(Sampler[list[int]]):
         self.rank = int(rank)
         self.world_size = int(world_size)
         self.epoch = 0
+        self.start_batch = 0
 
     def set_epoch(self, epoch: int) -> None:
         self.epoch = int(epoch)
+
+    def set_start_batch(self, start_batch: int) -> None:
+        """Resume an infinite deterministic stream without replaying samples.
+
+        ``start_batch`` counts already-consumed batches across all internal
+        epochs.  Skipping happens on lists of indices inside the sampler, so a
+        resumed job does not waste time loading and collating old batches.
+        """
+        if start_batch < 0:
+            raise ValueError("start_batch must be non-negative")
+        self.start_batch = int(start_batch)
 
     def _seq_tokens(self, idx: int) -> int:
         return 3 * max(1, int(self.dataset.get_num_patches(idx)))
@@ -82,12 +94,22 @@ class TokenBatchSampler(Sampler[list[int]]):
             max_patches = next_max_patches
         if batch and not self.drop_last:
             batches.append(batch)
+        # Keep deterministic order for validation. Training still interleaves
+        # length buckets, using the same global seed on every rank.
+        if self.shuffle:
+            random.Random(self.seed + epoch).shuffle(batches)
         return batches
 
     def __iter__(self) -> Iterator[list[int]]:
         epoch = self.epoch
+        batches_to_skip = self.start_batch
         while True:
-            yield from self._make_batches(epoch)
+            batches = self._make_batches(epoch)
+            if batches_to_skip >= len(batches):
+                batches_to_skip -= len(batches)
+            else:
+                yield from batches[batches_to_skip:]
+                batches_to_skip = 0
             if not self.infinite:
                 break
             epoch += 1

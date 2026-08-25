@@ -505,16 +505,23 @@ R = right-eye only
 by_eye_availability_suffix 分组指标
 run_summary 统计
 可视化采样
+训练时不可用眼全帧视为 missing
 ```
 
-frame-level loss / token validity 仍使用 `y_frame` qc label。
+frame-level loss / token validity 使用 `y_frame` qc label，并叠加
+suffix/source_suffix 或 `left_final_keep/right_final_keep` 的眼别可用性。
+不可用眼在训练时必须全帧视为 missing，但不改写 packed `y_frame.npy` 文件。
+
+某只眼 `x/y/s` feature 出现 NaN 时，不得把该眼该帧 label 强制改为
+missing；只能把 NaN feature 数值填充为0以保证 tensor 有限。只有 label
+字段本身为 NaN/非法时才按数据校验策略处理。
 
 如果 suffix 与 qc label 冲突：
 
 ```text
 记录 audit warning。
 分组以 suffix 为准。
-模型输入仍以 qc label 为准。
+模型输入的 quality / eye_token_valid / loss mask 以 qc label + eye availability 为准。
 ```
 
 ---
@@ -1651,6 +1658,7 @@ data:
   mmap_mode: r
   max_open_shards_per_worker: 44
   validate_offsets: false
+  enforce_suffix_eye_availability: true
 
 label:
   type: binary

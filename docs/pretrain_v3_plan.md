@@ -637,31 +637,31 @@ R = right-eye only
 ```text
 subject_eye_availability 分组指标使用后缀。
 可视化/metrics 中 single-eye vs both-eye 使用后缀。
+训练时不可用眼必须全帧视为 missing。
 ```
 
-frame-level missing 仍然来自 `y_frame` 的 qc label。若后缀与 qc label 冲突：
+frame-level missing 来自 `y_frame` 的 qc label，再叠加 suffix/source_suffix
+定义的眼别可用性。若某只眼按 suffix 不可用，则该眼所有帧在训练时都视为
+missing，即使 `y_frame` 中该眼某些帧为 valid。
+
+若后缀与 qc label 冲突：
 
 ```text
-训练时不静默修正原始 y_frame。
+训练时不静默改写原始 y_frame 文件。
 记录 audit warning。
 subject_eye_availability 分组以 suffix 为准。
-loss / eye_token_valid 仍以 frame-level qc label 为准。
+loss / eye_token_valid / quality 以 y_frame qc label + suffix eye availability 为准。
 ```
 
-如果需要强制后缀不可用眼为 missing，必须显式开启：
+第一版默认必须开启：
 
 ```yaml
 data:
-  enforce_suffix_eye_availability: false
+  enforce_suffix_eye_availability: true
 ```
 
-第一版默认：
-
-```text
-false
-```
-
-这样既保留 suffix 作为权威分组依据，又不在训练时隐式改写已生成数据。
+这样既保留 `y_frame` 原始文件不被改写，又能保证单眼不可用数据不会参与
+token validity、loss 或 area stats。
 
 ---
 
@@ -680,10 +680,14 @@ NaN 规则：
 如果某只眼任意 `x/y/s` 出现 NaN：
 
 ```text
-该眼该帧 label 强制视为 missing
-该眼该帧 x/y/s 置0
+不得用 feature NaN 推导或覆盖该眼该帧 label
+该眼该帧的 NaN feature 值置0，保证输入 tensor 有限
 记录 warning 计数
 ```
+
+frame-level label 只来自源数据 label / packed `y_frame`。只有 label 本身为
+NaN 或非法时才按 `data.nan_policy` 处理：`mark_missing` 可将 label NaN
+转为 missing；`error` 或非法 label 必须报错。
 
 ## 9.2 stim 通道 NaN
 
@@ -1263,7 +1267,7 @@ data:
 
   mmap_mode: r
   max_open_shards_per_worker: 16
-  enforce_suffix_eye_availability: false
+  enforce_suffix_eye_availability: true
   sampling_rate: 1000
 
 split:
@@ -1427,7 +1431,8 @@ pretrain split audit:
 preprocess:
   stim patch 顺序为 [fix_on, stim_on, stim_x_norm, stim_y_norm]
   stim_on=0 时 stim_x/y 强制0
-  eye NaN 转 missing
+  eye feature NaN 不改 label，仅将 NaN feature 置0
+  eye label NaN 在 mark_missing 策略下转 missing
   stim_on/fix_on NaN 报错
   stim_on=1 且 stim_x/y NaN 报错
   subject_eye_availability 来源 suffix/source_suffix

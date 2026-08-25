@@ -1,0 +1,30 @@
+data:
+  format: packed_mmap
+  data_dir: /mnt/disk_sde/hjf/eyemae_fast_dataset_v3_1/pretrain
+  train_index: pretrain/pretrain_all_unique.csv
+  max_open_shards_per_worker: 44
+  validate_offsets: true
+  enforce_suffix_eye_availability: true
+
+split:
+  seed: 42
+
+label:
+  nonblink_value: 0
+  blink_value: 1
+  missing_value: 2
+
+area:
+  use_log1p: false
+  per_eye: true
+  robust_zscore_by: subject_eye
+  mad_scale: 1.4826
+  mad_floor: 32.0
+  min_subject_valid_frames: 10000
+  clip: 5.0
+  eps: 1.0e-6
+  stats_path: outputs/eyevq/v31_shared/area_stats_per_subject_eye_all_seed42.json
+  # Global pooled and global-by-eye fallbacks use the same valid-eye policy.
+  global_reference_path: null
+  max_frames_per_subject: null
+  max_global_frames: 5000000

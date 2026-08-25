@@ -25,6 +25,20 @@ the source of truth for current pretraining and downstream fine-tuning. Older
 audit notes in `eyemae/docs/` are historical records used to explain the data
 decisions; they are not the canonical dataset specification.
 
+Important frame-label note:
+
+```text
+eyemae_fast_dataset_v2 keeps the original v2 derived y_frame behavior.
+If an eye has non-finite x/y/area values, that eye's frame label is set to
+2=MISSING in y_frame.
+```
+
+For the source-label-preserving packed dataset, use:
+
+```text
+/mnt/disk_sde/data-260606/extracted/eyemae_fast_dataset_v3
+```
+
 Current `ml_subject_id` rule:
 
 ```text

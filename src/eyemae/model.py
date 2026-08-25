@@ -80,7 +80,8 @@ class EyeMAEModel(nn.Module):
         self.d_model = d_model
         self.max_patches = int(model_cfg["max_patches"])
         self.content_tokenizer = ConvTokenizer(4, (64, 128), patch, d_model, (5, 3))
-        self.quality_tokenizer = ConvTokenizer(1, (32,), patch, d_model, (3,))
+        self.use_quality_embedding = bool(model_cfg.get("use_quality_embedding", True))
+        self.quality_tokenizer = ConvTokenizer(1, (32,), patch, d_model, (3,)) if self.use_quality_embedding else None
         self.stim_tokenizer = ConvTokenizer(4, (64,), patch, d_model, (3,))
         self.task_embedding = nn.Embedding(4, d_model)
         self.use_token_type_embedding = bool(model_cfg.get("use_token_type_embedding", True))
@@ -99,6 +100,9 @@ class EyeMAEModel(nn.Module):
                 for _ in range(int(model_cfg["n_layers"]))
             ]
         )
+        # torch.compile each block individually (dynamic=True for variable sequence lengths).
+        if bool(model_cfg.get("compile_blocks", False)) and hasattr(torch, "compile"):
+            self.blocks = nn.ModuleList([torch.compile(block, dynamic=True) for block in self.blocks])
         self.final_norm = RMSNorm(d_model)
         self.pred_head = nn.Sequential(nn.Linear(d_model, d_model), nn.GELU(), nn.Linear(d_model, patch * 4))
         self.patch = patch
@@ -119,7 +123,7 @@ class EyeMAEModel(nn.Module):
         if n > self.max_patches:
             raise ValueError(f"num patches {n} exceeds model.max_patches {self.max_patches}")
         content_token = self.content_tokenizer(content)
-        quality_token = self.quality_tokenizer(quality)
+        quality_token = self.quality_tokenizer(quality) if self.use_quality_embedding else None
         stim_token = self.stim_tokenizer(stim)
         content_token = torch.where(mae_mask[..., None], self.mask_token.view(1, 1, 1, -1), content_token)
 
@@ -133,8 +137,12 @@ class EyeMAEModel(nn.Module):
             right_type = self.token_type_embedding(torch.full((), 2, dtype=torch.long, device=content.device))
 
         s_tokens = stim_token + task.squeeze(2) + times + stim_type.view(1, 1, -1)
-        l_tokens = content_token[:, :, 0] + quality_token[:, :, 0] + task.squeeze(2) + times + left_type.view(1, 1, -1)
-        r_tokens = content_token[:, :, 1] + quality_token[:, :, 1] + task.squeeze(2) + times + right_type.view(1, 1, -1)
+        if self.use_quality_embedding:
+            l_tokens = content_token[:, :, 0] + quality_token[:, :, 0] + task.squeeze(2) + times + left_type.view(1, 1, -1)
+            r_tokens = content_token[:, :, 1] + quality_token[:, :, 1] + task.squeeze(2) + times + right_type.view(1, 1, -1)
+        else:
+            l_tokens = content_token[:, :, 0] + task.squeeze(2) + times + left_type.view(1, 1, -1)
+            r_tokens = content_token[:, :, 1] + task.squeeze(2) + times + right_type.view(1, 1, -1)
         return self.fusion_norm(s_tokens), self.fusion_norm(l_tokens), self.fusion_norm(r_tokens)
 
     @staticmethod

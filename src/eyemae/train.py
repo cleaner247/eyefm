@@ -13,6 +13,8 @@ from typing import Any
 import numpy as np
 import torch
 from torch.nn.parallel import DistributedDataParallel
+
+torch.set_float32_matmul_precision("high")
 from torch.utils.data import DataLoader, Dataset, DistributedSampler
 
 from .batching import TokenBatchSampler
@@ -436,6 +438,28 @@ def train_main(args: argparse.Namespace) -> None:
                 after_forward_loss = _timed_now(device, log_timing)
                 timing["forward_loss"] = after_forward_loss - after_mask
                 denominator = float(stats["total_denominator"].detach().cpu())
+
+                # Compute TFLOPs for this step (forward + backward)
+                B = batch["content"].shape[0]
+                N = batch["content"].shape[1]
+                d = int(cfg["model"]["d_model"])
+                L = int(cfg["model"]["n_layers"])
+                ffn = int(cfg["model"]["ffn_hidden"])
+                # Tokenizer: 3× Conv1d ≈ negligible (~0.01TFLOPs)
+                # Per-token FLOPs per layer: attn (QKV+output=4d²+2Nd) + FFN (2×SwiGLU=3d·ffn)
+                flops_per_token = L * (4 * d * d + 2 * N * d + 3 * d * ffn)
+                # Total tokens across all GPUs
+                total_tokens = B * N * world_size
+                flops_fwd = flops_per_token * total_tokens
+                flops_bwd = 2 * flops_fwd  # backward ~2x forward
+                flops_total = flops_fwd + flops_bwd
+                tflops_total = flops_total / 1e12
+                # Per-GPU compute time (forward + backward only)
+                gpu_time = float(timing["forward_loss"]) + float(timing.get("backward", 0.01))
+                if gpu_time > 0:
+                    tflops_per_gpu_s = tflops_total / gpu_time / world_size
+                else:
+                    tflops_per_gpu_s = 0.0
                 after_denominator = _timed_now(device, log_timing)
                 timing["denominator_cpu"] = after_denominator - after_forward_loss
                 if denominator <= 0:
@@ -465,7 +489,7 @@ def train_main(args: argparse.Namespace) -> None:
                 if rank == 0 and global_step % int(cfg["train"]["log_every_steps"]) == 0:
                     log_start = _timed_now(device, log_timing)
                     LOGGER.info(
-                        "step=%s loss=%.5f xy=%.5f area=%.5f blink=%.5f vel=%.5f lr=%.2e",
+                        "step=%s loss=%.5f xy=%.5f area=%.5f blink=%.5f vel=%.5f lr=%.2e tflops/gpu/s=%.1f",
                         global_step,
                         float(stats["total_loss"].cpu()),
                         float(stats["xy_loss"].cpu()),
@@ -473,6 +497,7 @@ def train_main(args: argparse.Namespace) -> None:
                         float(stats["blink_loss"].cpu()),
                         float(stats["velocity_loss"].cpu()),
                         lr,
+                        tflops_per_gpu_s,
                     )
                     writer.add_scalar("train/total_loss", float(stats["total_loss"].cpu()), global_step)
                     writer.add_scalar("train/xy_loss", float(stats["xy_loss"].cpu()), global_step)

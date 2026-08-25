@@ -7,7 +7,8 @@ import numpy as np
 import torch
 
 from eyemae.config import load_config
-from eyemae.downstream_data import DownstreamTrialDataset, collate_downstream_trials
+from eyemae.data import load_npz_trial
+from eyemae.downstream_data import DownstreamTrialDataset, apply_final_keep_to_trial, collate_downstream_trials
 from eyemae.downstream_metrics import (
     aggregate_subject_predictions,
     binary_auroc,
@@ -231,6 +232,11 @@ def test_downstream_dataset_applies_manifest_final_keep(tmp_path: Path) -> None:
     split.write_text(path.relative_to(root).as_posix() + "\n", encoding="utf-8")
     cfg = _cfg(tmp_path, root)
     dataset = DownstreamTrialDataset(root, split, cfg, disease="MCI")
+    raw_trial = load_npz_trial(path, root, cfg)
+    trial_with_keep = apply_final_keep_to_trial(raw_trial, dataset.records[0], cfg)
+    assert not trial_with_keep["left_eye_available"]
+    assert trial_with_keep["right_eye_available"]
+    assert np.array_equal(trial_with_keep["eye"][:, 3], raw_trial["eye"][:, 3])
     item = dataset[0]
     assert item["label"] == 1.0
     assert not item["eye_token_valid"][:, 0].any()

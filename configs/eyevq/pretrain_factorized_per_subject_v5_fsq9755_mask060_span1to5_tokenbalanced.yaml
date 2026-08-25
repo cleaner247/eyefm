@@ -1,0 +1,74 @@
+attention:
+  stim_isolated: true
+
+bert:
+  d_model: 384
+  n_layers: 12
+  n_heads: 8
+  dim_ff: 1152
+  dropout: 0.0
+  max_time: 128
+  max_patches: 128
+  factorized_fsq: true
+
+vq:
+  type: fsq
+  fsq_d: 4
+  fsq_L: [9, 7, 5, 5]
+  fsq_activation: tanh
+  min_nonmissing_frac: 0.85
+
+patch:
+  samples: 40
+  stride: 40
+
+area:
+  require_contract: true
+  use_log1p: false
+  per_eye: true
+  mad_scale: 1.4826
+  mad_floor: 32.0
+  min_subject_valid_frames: 10000
+  clip: 5.0
+  eps: 1.0e-6
+
+mask:
+  mode: paired_span
+  eye_masking_ratio: 0.60
+  span_min_patches: 1
+  span_max_patches: 5
+  # Samples spans with p(length) proportional to 1/length, so lengths 1..5
+  # each contribute 20% of masked patches in expectation before feasibility
+  # conditioning.  The paired mask always applies to L/R together.
+  span_length_distribution: token_balanced
+
+loss:
+  label_smoothing: 0.0
+  masked_reduction: per_trial_then_global_valid_trial_mean_async
+
+train:
+  seed: 42
+  precision: bf16
+  compile_model: false
+  lr: 3.0e-4
+  min_lr: 3.0e-5
+  betas: [0.9, 0.95]
+  weight_decay: 0.05
+  grad_clip: 1.0
+  warmup_steps: 2000
+  total_steps: 50000
+  log_every_steps: 100
+  val_every_steps: 5000
+  max_val_batches: null
+  save_every_steps: 5000
+  data_path: /mnt/disk_sde/hjf/eyemae_fast_dataset_v5/pretrain
+  train_index: pretrain/pretrain_train.csv
+  val_index: pretrain/pretrain_validation.csv
+  require_any_eye_keep: true
+  area_stats_path: outputs/eyevq/v5_shared/area_stats_per_subject_eye_all_seed42.json
+  tokenizer_checkpoint: outputs/eyevq/v5_fsq9755_nodecay_optimal_search/tokenizer/ckpt_final.pt
+  code_ids_cache: outputs/eyevq/v5_fsq9755_nodecay_optimal_search/tokenizer_candidates/step040000/cache/code_ids_train_val.npz
+  max_seq_tokens_per_gpu: 262144
+  max_trials_per_gpu: 128
+  num_workers: 4
+  prefetch_factor: 4

@@ -293,6 +293,76 @@ def aggregate_subject_predictions_multiclass(rows: list[dict[str, Any]], num_cla
     return out
 
 
+def aggregate_subject_by_task(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Group trials by subject and task_id, mean-pool per task → T task-logits.
+
+    Returns subject rows with logit_0..logit_{T-1}, where T = number of task types.
+    """
+    all_tasks = sorted({int(row["task_id"]) for row in rows})
+    grouped: dict[str, dict[int, list[float]]] = defaultdict(lambda: defaultdict(list))
+    labels: dict[str, int] = {}
+    for row in rows:
+        key = str(row["subject_key"])
+        grouped[key][int(row["task_id"])].append(float(row["logit"]))
+        labels[key] = int(row["label"])
+
+    out = []
+    for subject_key in sorted(grouped):
+        task_logits = []
+        for tid in all_tasks:
+            vals = grouped[subject_key].get(tid, [0.0])
+            task_logits.append(sum(vals) / len(vals))
+        r = {
+            "base_subject_id": subject_key,
+            "subject_key": subject_key,
+            "label": labels[subject_key],
+            "num_trials": sum(len(v) for v in grouped[subject_key].values()),
+        }
+        for c, v in enumerate(task_logits):
+            r[f"logit_{c}"] = v
+        out.append(r)
+    return out
+
+
+def aggregate_subject_by_task_multiclass(
+    rows: list[dict[str, Any]],
+    num_classes: int,
+) -> list[dict[str, Any]]:
+    """Multiclass variant: per-task mean logits → T*C task-logits per subject."""
+    all_tasks = sorted({int(row["task_id"]) for row in rows})
+    grouped: dict[str, dict[int, list[list[float]]]] = defaultdict(lambda: defaultdict(list))
+    labels: dict[str, int] = {}
+    for row in rows:
+        key = str(row["subject_key"])
+        trial_logits = [float(row[f"logit_{c}"]) for c in range(num_classes)]
+        grouped[key][int(row["task_id"])].append(trial_logits)
+        labels[key] = int(row["label"])
+
+    out = []
+    for subject_key in sorted(grouped):
+        T = len(all_tasks)
+        task_means = []
+        for tid in all_tasks:
+            vals = grouped[subject_key].get(tid, [[0.0] * num_classes])
+            mean = [sum(v[c] for v in vals) / len(vals) for c in range(num_classes)]
+            task_means.append(mean)
+        r = {
+            "base_subject_id": subject_key,
+            "subject_key": subject_key,
+            "label": labels[subject_key],
+            "num_trials": sum(len(v) for v in grouped[subject_key].values()),
+        }
+        idx = 0
+        for t in range(T):
+            for c in range(num_classes):
+                r[f"logit_{idx}"] = task_means[t][c]
+                idx += 1
+        out.append(r)
+    return out
+
+
 def write_prediction_csv(path: str | Path, rows: list[dict[str, Any]]) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -301,3 +371,195 @@ def write_prediction_csv(path: str | Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _fit_calibration_binary(
+    subject_rows: list[dict[str, Any]],
+    lr: float = 0.01,
+    max_iter: int = 200,
+) -> tuple[float, float]:
+    """Fit w,b for binary logit calibration. Returns (w, b)."""
+    import torch
+    from torch import nn
+
+    device = torch.device("cpu")
+    logits_t = torch.tensor([[float(r["logit"])] for r in subject_rows], device=device)
+    labels_t = torch.tensor([int(r["label"]) for r in subject_rows], device=device, dtype=torch.float32)
+    w = nn.Parameter(torch.ones(1, device=device))
+    b = nn.Parameter(torch.zeros(1, device=device))
+    opt = torch.optim.LBFGS([w, b], lr=lr, max_iter=max_iter, line_search_fn="strong_wolfe")
+    def closure():
+        opt.zero_grad()
+        cal = logits_t.squeeze(-1) * w + b
+        loss = nn.functional.binary_cross_entropy_with_logits(cal, labels_t)
+        loss.backward()
+        return loss
+    opt.step(closure)
+    return w.item(), b.item()
+
+
+def _fit_calibration_linear(
+    subject_rows: list[dict[str, Any]],
+    num_classes: int,
+    lr: float = 0.01,
+    max_iter: int = 200,
+    bias_only: bool = False,
+    weight_decay: float = 0.0,
+) -> tuple["torch.Tensor", "torch.Tensor", int]:
+    """Fit Linear(in_dim, out_dim) on subject_rows with per-task logits.
+
+    If bias_only=True, fix W=1/in_dim (equal-weight mean) and only learn b.
+    weight_decay adds L2 penalty to W (not b).
+    """
+    import torch
+    from torch import nn
+
+    if not subject_rows:
+        return torch.eye(1), torch.zeros(1), 1
+
+    device = torch.device("cpu")
+    in_dim = sum(1 for k in subject_rows[0] if k.startswith("logit_"))
+    out_dim = 1 if num_classes <= 2 else num_classes - 1
+
+    X = torch.tensor([[float(r[f"logit_{c}"]) for c in range(in_dim)] for r in subject_rows], device=device)
+    if out_dim == 1:
+        y = torch.tensor([int(r["label"]) for r in subject_rows], device=device, dtype=torch.float32)
+    else:
+        y = torch.tensor([int(r["label"]) for r in subject_rows], device=device, dtype=torch.long)
+
+    if bias_only:
+        W_fixed = torch.ones(out_dim, in_dim, device=device) / in_dim
+        b = nn.Parameter(torch.zeros(out_dim, device=device))
+        opt = torch.optim.LBFGS([b], lr=lr, max_iter=max_iter, line_search_fn="strong_wolfe")
+        def closure():
+            opt.zero_grad()
+            out = X @ W_fixed.T + b
+            if out_dim == 1:
+                loss = nn.functional.binary_cross_entropy_with_logits(out.squeeze(-1), y)
+            else:
+                loss = nn.functional.cross_entropy(out, y)
+            loss.backward()
+            return loss
+        opt.step(closure)
+        return W_fixed, b.detach(), in_dim
+
+    W = nn.Parameter(torch.randn(out_dim, in_dim, device=device) * 0.01)
+    b = nn.Parameter(torch.zeros(out_dim, device=device))
+    opt = torch.optim.LBFGS([W, b], lr=lr, max_iter=max_iter, line_search_fn="strong_wolfe")
+    def closure():
+        opt.zero_grad()
+        out = X @ W.T + b
+        if out_dim == 1:
+            loss = nn.functional.binary_cross_entropy_with_logits(out.squeeze(-1), y)
+        else:
+            loss = nn.functional.cross_entropy(out, y)
+        if weight_decay > 0:
+            loss = loss + weight_decay * (W * W).sum()
+        loss.backward()
+        return loss
+    opt.step(closure)
+    return W.detach(), b.detach(), in_dim
+
+
+def _apply_calibration_linear(
+    subject_rows: list[dict[str, Any]],
+    W: "torch.Tensor",
+    b: "torch.Tensor",
+    in_dim: int,
+    num_classes: int,
+) -> list[dict[str, Any]]:
+    """Apply Linear(in_dim, out_dim) calibration to subject rows."""
+    import torch
+
+    out_dim = W.shape[0]
+    out = []
+    for r in subject_rows:
+        x = torch.tensor([float(r[f"logit_{c}"]) for c in range(in_dim)])
+        cal = (x @ W.T + b).tolist()
+        rr = dict(r)
+        if out_dim == 1:
+            rr["logit"] = float(cal[0]) if isinstance(cal, list) else float(cal)
+            rr["prob"] = sigmoid(rr["logit"])
+        else:
+            probs = softmax(cal)
+            for c in range(out_dim):
+                rr[f"logit_{c}"] = float(cal[c])
+                rr[f"prob_{c}"] = float(probs[c])
+            rr["pred"] = int(max(range(out_dim), key=lambda c: probs[c]))
+        out.append(rr)
+    return out
+
+
+def _fit_calibration_multiclass(
+    subject_rows: list[dict[str, Any]],
+    num_classes: int,
+    lr: float = 0.01,
+    max_iter: int = 200,
+) -> tuple["torch.Tensor", "torch.Tensor"]:
+    """Fit W,b for multiclass logit calibration. Returns (W, b) tensors."""
+    import torch
+    from torch import nn
+
+    device = torch.device("cpu")
+    logits_t = torch.tensor([[float(row[f"logit_{c}"]) for c in range(num_classes)] for row in subject_rows], device=device)
+    labels_t = torch.tensor([int(row["label"]) for row in subject_rows], device=device, dtype=torch.long)
+    W = nn.Parameter(torch.eye(num_classes, device=device))
+    b = nn.Parameter(torch.zeros(num_classes, device=device))
+    opt = torch.optim.LBFGS([W, b], lr=lr, max_iter=max_iter, line_search_fn="strong_wolfe")
+    def closure():
+        opt.zero_grad()
+        cal = logits_t @ W.T + b
+        loss = nn.functional.cross_entropy(cal, labels_t)
+        loss.backward()
+        return loss
+    opt.step(closure)
+    return W.detach(), b.detach()
+
+
+def _apply_calibration_binary(
+    subject_rows: list[dict[str, Any]], w: float, b: float
+) -> list[dict[str, Any]]:
+    """Apply learned w,b to binary subject rows."""
+    out = []
+    for row in subject_rows:
+        cal_logit = float(row["logit"]) * w + b
+        r = dict(row)
+        r["logit"] = cal_logit
+        r["prob"] = sigmoid(cal_logit)
+        out.append(r)
+    return out
+
+
+def _apply_calibration_multiclass(
+    subject_rows: list[dict[str, Any]], W: "torch.Tensor", b: "torch.Tensor", num_classes: int
+) -> list[dict[str, Any]]:
+    """Apply learned W,b to multiclass subject rows."""
+    out = []
+    for row in subject_rows:
+        raw = [float(row[f"logit_{c}"]) for c in range(num_classes)]
+        cal = (W @ torch.tensor(raw) + b).tolist()
+        probs = softmax(cal)
+        r = dict(row)
+        for c in range(num_classes):
+            r[f"logit_{c}"] = float(cal[c])
+            r[f"prob_{c}"] = float(probs[c])
+        r["pred"] = int(max(range(num_classes), key=lambda c: probs[c]))
+        out.append(r)
+    return out
+
+
+def calibrate_subject_logits(
+    subject_rows: list[dict[str, Any]],
+    num_classes: int,
+    *,
+    lr: float = 0.01,
+    max_iter: int = 200,
+) -> list[dict[str, Any]]:
+    """Fit AND apply linear calibration (convenience, use fit+apply separately for proper val/test split)."""
+    if not subject_rows:
+        return subject_rows
+    if num_classes == 1:
+        w, b = _fit_calibration_binary(subject_rows, lr, max_iter)
+        return _apply_calibration_binary(subject_rows, w, b)
+    W, b = _fit_calibration_multiclass(subject_rows, num_classes, lr, max_iter)
+    return _apply_calibration_multiclass(subject_rows, W, b, num_classes)
