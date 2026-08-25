@@ -35,6 +35,11 @@ packed payloads are bitwise identical and inherit V5's additional guarded
 75-Hz filtering stage; they are experimental and are not silently treated as a
 raw/no-filter data revision.
 
+The currently running V6 job is an experimental candidate, not a silent change
+to this reference. Its resolved configuration and logs live under its output
+directory. A local experiment script is not a supported entry point unless it
+has been promoted into `configs/eyevq/final/` and passes the canonical preflight.
+
 ## Run
 
 Install and verify:
@@ -66,6 +71,7 @@ does not match. Checkpoints and large training outputs are never stored in Git.
 ## Documentation
 
 - Architecture and operational contract: `src/eyemae/eyevq/README.md`
+- Authoritative code map and terminology: `docs/code_structure.md`
 - Data lineage and experiment summary: `docs/eyevq_project_report_20260825.md`
 - Paper draft: `docs/iclr_eyevq_paper.md`
 

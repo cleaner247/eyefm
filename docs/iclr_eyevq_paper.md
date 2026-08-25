@@ -180,9 +180,10 @@ $$
 The inner mean gives every supervised trial equal weight regardless of length.
 Distributed training all-reduces numerators and denominators so that this is the
 true global-trial mean. Our current validated reference masks 60% of eligible
-time patches with uniformly sampled span lengths 1–5. A controlled ablation over
-random masks, span 1–6/1–8, and length-event versus token-balanced distributions
-is in progress; only validation metrics will select the final geometry.
+time patches with uniformly sampled span lengths 1–5. Historical controlled
+ablations covered random masks, span 1–6/1–8, and length-event versus
+token-balanced distributions; only validation metrics selected the reference
+geometry.
 
 ### 3.5 Subject-level downstream inference
 
@@ -332,9 +333,9 @@ The completed MCI aggregation ablation favors K16 over K4: three-seed mean
 validation AUROC increases from 0.8852 to 0.8923 and test AUROC from 0.8784 to
 0.8879, while test standard deviation decreases from 0.0136 to 0.0075.
 Consistency weights 0.02 and 0.05 leave seed-42 validation AUROC unchanged and
-are therefore rejected. A new end-to-end run removes stimulus-to-CLS attention
-in the tokenizer and uses factorized CE with 60% symmetric spans in [1,6]. Its
-tokenizer is complete and non-collapsed. BERT reaches 50K with validation
+are therefore rejected. The V5 no-stimulus-to-CLS experiment uses factorized CE
+with 60% symmetric spans in [1,6]. Its tokenizer is complete and non-collapsed.
+BERT reaches 50K with validation
 loss/accuracy/perplexity 2.4158/0.3537/11.20, but its downstream evaluation is
 not yet complete, so it is not used to revise the selected model.
 
