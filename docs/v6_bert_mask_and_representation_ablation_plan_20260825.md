@@ -108,6 +108,14 @@ Tokenizer 候选若出现以下任一条件直接淘汰，不继续训练 BERT�
 
 ## 6. 高效执行顺序
 
+### Stage 0：10K BERT + Train-only 冻结表示探针
+
+- 新 mask 只训练 10K；当前 4-GPU 实测约 40 分钟。
+- 冻结 BERT，缓存下游 Train split 的 trial CLS；不读取 validation/test。
+- 对每个 subject 先在任务内平均 CLS，再四任务等权平均；使用固定的 subject-stratified 5-fold logistic regression 比较 MCI/PD5 Train OOF AUROC。
+- 该阶段只作负向筛选：明显落后的候选淘汰，前两名进入正式筛选。探针第一名不能直接宣布为最终方案，因为它不包含 encoder 微调、demographics 和非线性 head。
+- 已有 BERT checkpoint 不需要任何 BERT 训练，直接缓存 CLS 并运行探针即可。
+
 ### Stage A：15K BERT + 单 seed 下游筛选
 
 - mask 六组，固定现有 tokenizer/cache。
@@ -165,14 +173,14 @@ Exact code accuracy 只在相同目标和相同 codebook 内可比较，不能�
 只生成和验证配置，不启动训练：
 
 ```bash
-PYTHONPATH=src python scripts/run_eyevq_representation_ablation.py --phase screen
+PYTHONPATH=src python scripts/run_eyevq_representation_ablation.py --phase probe
 ```
 
 执行单组快速筛选：
 
 ```bash
 PYTHONPATH=src python scripts/run_eyevq_representation_ablation.py \
-  --phase screen --only mask_random_r050 --execute
+  --phase probe --only mask_random_r050 --execute
 ```
 
 对 validation 选出的候选做三 seed 正式确认：

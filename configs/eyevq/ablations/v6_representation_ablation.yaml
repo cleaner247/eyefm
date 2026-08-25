@@ -12,12 +12,16 @@ base:
 execution:
   gpu_ids: "0,1,2,3"
   nproc_per_node: 4
+  # Fast negative filter: short BERT + Train-only frozen-CLS 5-fold probe.
+  probe_bert_steps: 10000
+  probe_tokenizer_steps: 10000
   screen_bert_steps: 15000
   confirm_bert_steps: 50000
   screen_tokenizer_steps: 20000
   confirm_tokenizer_steps: 40000
   screen_downstream_epochs: 50
   confirm_downstream_epochs: 100
+  probe_seeds: [42]
   screen_seeds: [42]
   confirm_seeds: [42, 43, 44]
 

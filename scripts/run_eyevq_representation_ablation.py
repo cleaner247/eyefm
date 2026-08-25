@@ -66,7 +66,7 @@ def materialize(matrix_path: Path, phase: str, selected: set[str] | None) -> tup
     }
     steps = int(execution[f"{phase}_bert_steps"])
     tokenizer_steps = int(execution[f"{phase}_tokenizer_steps"])
-    epochs = int(execution[f"{phase}_downstream_epochs"])
+    epochs = int(execution.get(f"{phase}_downstream_epochs", 0))
     seeds = [int(seed) for seed in execution[f"{phase}_seeds"]]
     env = {"CUDA_VISIBLE_DEVICES": str(execution["gpu_ids"])}
     nproc = str(execution["nproc_per_node"])
@@ -137,6 +137,29 @@ def materialize(matrix_path: Path, phase: str, selected: set[str] | None) -> tup
 
         bert_checkpoint = run_dir / "bert" / "ckpt_best.pt"
         for task, task_cfg_base in downstream_base.items():
+            if phase == "probe":
+                task_cfg = deepcopy(task_cfg_base)
+                task_cfg["model"]["bert_checkpoint"] = str(bert_checkpoint)
+                task_path = config_dir / f"{task}_probe.yaml"
+                write_yaml(task_path, task_cfg)
+                task_run = run_dir / task
+                cache_path = task_run / "train_cls.pt"
+                result_path = task_run / "probe_5fold.json"
+                minimum = int(task_cfg["mil"].get("eligibility_min_trials_per_task", 4))
+                probe_env = {
+                    "CUDA_VISIBLE_DEVICES": str(execution["gpu_ids"]).split(",")[0]
+                }
+                commands.append({
+                    "stage": f"{task}_cache_train_cls",
+                    "command": [sys.executable, "-m", "eyemae.eyevq.downstream.cache_trial_cls", "--config", str(task_path), "--output", str(cache_path), "--min-trials-per-task", str(minimum), "--train-only"],
+                    "env": probe_env,
+                })
+                commands.append({
+                    "stage": f"{task}_train_only_probe",
+                    "command": [sys.executable, "-m", "eyemae.eyevq.downstream.screen_bert_representation", "--cache", str(cache_path), "--output", str(result_path), "--folds", "5", "--seed", "42", "--c", "0.1"],
+                    "env": probe_env,
+                })
+                continue
             for seed in seeds:
                 task_cfg = deepcopy(task_cfg_base)
                 task_cfg["model"]["bert_checkpoint"] = str(bert_checkpoint)
@@ -145,7 +168,7 @@ def materialize(matrix_path: Path, phase: str, selected: set[str] | None) -> tup
                 task_path = config_dir / f"{task}_seed{seed}.yaml"
                 write_yaml(task_path, task_cfg)
                 command = [sys.executable, "-m", "eyemae.eyevq.downstream.train_mil", "--config", str(task_path), "--output_dir", str(run_dir / task / f"seed{seed}")]
-                if phase == "screen":
+                if phase != "confirm":
                     command.append("--skip-test")
                 commands.append({"stage": f"{task}_seed{seed}", "command": command, "env": {"CUDA_VISIBLE_DEVICES": str(execution["gpu_ids"]).split(",")[0]}})
 
@@ -183,7 +206,7 @@ def execute(plan: list[dict]) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--matrix", default="configs/eyevq/ablations/v6_representation_ablation.yaml")
-    parser.add_argument("--phase", choices=("screen", "confirm"), default="screen")
+    parser.add_argument("--phase", choices=("probe", "screen", "confirm"), default="probe")
     parser.add_argument("--only", default=None, help="Comma-separated candidate names")
     parser.add_argument("--execute", action="store_true", help="Run sequentially; default only materializes and validates")
     args = parser.parse_args()
