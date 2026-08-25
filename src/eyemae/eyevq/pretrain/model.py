@@ -19,6 +19,15 @@ from eyemae.eyevq.tokenizer.model import (
     RMSNorm, SwiGLU, TransformerBlock, build_stim_isolated_attn_mask,
 )
 
+TARGET_FACTORIZED_CODE = "factorized_code"
+TARGET_JOINT_CODE = "joint_code"
+TARGET_RAW_PATCH = "raw_patch"
+SUPPORTED_TARGET_TYPES = {
+    TARGET_FACTORIZED_CODE,
+    TARGET_JOINT_CODE,
+    TARGET_RAW_PATCH,
+}
+
 
 # ──────────────────────────────────────────────
 # Transformer Builder (EyeMAE-aligned)
@@ -124,6 +133,39 @@ def factorized_fsq_cross_entropy(
         dim=-1,
     )
     return per_dim_ce, per_dim_ce.sum(dim=-1)
+
+
+def raw_patch_reconstruction_losses(
+    prediction: torch.Tensor,
+    target: torch.Tensor,
+    missing: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Per-token continuous Smooth-L1 and blink BCE for raw eye patches.
+
+    Missing frames never contribute.  Blink frames supervise the blink channel,
+    but do not force the undefined x/y/area values toward their padding value.
+    """
+    if prediction.shape != target.shape or prediction.ndim != 3:
+        raise ValueError("raw patch prediction and target must have shape [tokens, 4, samples]")
+    if missing.shape != target.shape[:1] + target.shape[2:]:
+        raise ValueError("missing must have shape [tokens, samples]")
+    valid = ~missing.bool()
+    blink_target = target[:, 3, :].clamp(0, 1)
+    continuous_valid = valid & (blink_target < 0.5)
+    continuous_error = F.smooth_l1_loss(
+        prediction[:, :3, :], target[:, :3, :], reduction="none"
+    )
+    continuous_sum = (
+        continuous_error * continuous_valid.unsqueeze(1)
+    ).sum(dim=(1, 2))
+    continuous_denom = continuous_valid.sum(dim=1).mul(3).clamp_min(1)
+    continuous_loss = continuous_sum / continuous_denom
+
+    blink_error = F.binary_cross_entropy_with_logits(
+        prediction[:, 3, :], blink_target, reduction="none"
+    )
+    blink_loss = (blink_error * valid).sum(dim=1) / valid.sum(dim=1).clamp_min(1)
+    return continuous_loss, blink_loss, valid
 
 
 # ──────────────────────────────────────────────
@@ -247,6 +289,9 @@ class EyeVQBERT(nn.Module):
         min_nonmissing_frac: float = 0.50,
         predictor_span_length_embedding: bool = False,
         max_mask_span_length: int = 0,
+        target_type: str | None = None,
+        raw_continuous_weight: float = 1.0,
+        raw_blink_weight: float = 1.0,
     ):
         super().__init__()
         self.K_e = K_e
@@ -255,6 +300,18 @@ class EyeVQBERT(nn.Module):
         self.stim_isolated_attn = stim_isolated_attn
         self.stim_attend_cls = bool(stim_attend_cls)
         self.factorized_fsq = factorized_fsq
+        self.target_type = target_type or (
+            TARGET_FACTORIZED_CODE if factorized_fsq else TARGET_JOINT_CODE
+        )
+        if self.target_type not in SUPPORTED_TARGET_TYPES:
+            raise ValueError(f"Unsupported BERT target_type={self.target_type!r}")
+        if self.target_type == TARGET_FACTORIZED_CODE and not factorized_fsq:
+            raise ValueError("factorized_code target requires factorized_fsq=true")
+        if self.target_type != TARGET_FACTORIZED_CODE and factorized_fsq:
+            raise ValueError(f"{self.target_type} target requires factorized_fsq=false")
+        self.raw_continuous_weight = float(raw_continuous_weight)
+        self.raw_blink_weight = float(raw_blink_weight)
+        self.patch_samples = int(patch_samples)
         self.fsq_L = list(fsq_L) if fsq_L is not None else None
         self.min_nonmissing_frac = float(min_nonmissing_frac)
         self.predictor_span_length_embedding = bool(predictor_span_length_embedding)
@@ -295,7 +352,11 @@ class EyeVQBERT(nn.Module):
                 self.span_length_embed.weight[0].zero_()
         else:
             self.span_length_embed = None
-        if self.factorized_fsq:
+        if self.target_type == TARGET_RAW_PATCH:
+            self.pred_head = PredictionHead(
+                d_model=d_model, K_e=4 * self.patch_samples
+            )
+        elif self.factorized_fsq:
             # Factorized FSQ head: one Linear for each configured dimension.
             self.pred_head = nn.ModuleList(
                 [nn.Linear(d_model, li) for li in self.fsq_L]
@@ -361,7 +422,7 @@ class EyeVQBERT(nn.Module):
         pad_mask: torch.Tensor,              # [B, N]
         eye_nonmissing_frac: torch.Tensor,   # [B, N, 2]
         task_ids: torch.Tensor,              # [B]
-        eye_code_ids: torch.Tensor,          # [B, N, 2]  VQ labels from frozen tokenizer
+        eye_code_ids: torch.Tensor | None,   # [B, N, 2], unused for raw_patch
         bert_mask: torch.Tensor,             # [B, 1+N*3]
         mask_span_lengths: torch.Tensor | None = None,  # [B,N], zero for visible patches
     ) -> tuple[torch.Tensor, dict[str, float]]:
@@ -383,14 +444,8 @@ class EyeVQBERT(nn.Module):
         r_masked = bert_mask & is_r.unsqueeze(0)
         eye_masked = (l_masked | r_masked)  # [B, total_len]
 
-        # ── Build flat target per position (vectorized, no per-t loop) ──
-        flat_targets = torch.zeros(B, total_len, dtype=torch.long, device=device)
-        flat_targets[:, 2::3] = eye_code_ids[:, :, 0]  # L positions 2,5,8,...
-        flat_targets[:, 3::3] = eye_code_ids[:, :, 1]  # R positions 3,6,9,...
-
         # 只对 masked 位置算 logits (替代全序列 logits_all = pred_head(hidden))
         masked_hidden = hidden[eye_masked]             # [N_masked, d_model]
-        masked_targets = flat_targets[eye_masked]      # [N_masked]
         masked_trial_indices = (
             torch.arange(B, device=device).unsqueeze(1).expand(B, total_len)[eye_masked]
         )
@@ -408,6 +463,55 @@ class EyeVQBERT(nn.Module):
             flat_span_lengths[:, 3::3] = mask_span_lengths
             masked_span_lengths = flat_span_lengths[eye_masked]
             masked_hidden = masked_hidden + self.span_length_embed(masked_span_lengths)
+
+        if self.target_type == TARGET_RAW_PATCH:
+            flat_raw = eye_patches.new_zeros(B, total_len, 4, self.patch_samples)
+            flat_raw[:, 2::3] = eye_patches[:, :, 0]
+            flat_raw[:, 3::3] = eye_patches[:, :, 1]
+            flat_missing = torch.ones(
+                B, total_len, self.patch_samples, dtype=torch.bool, device=device
+            )
+            missing = quality.squeeze(-1) > 0.5
+            flat_missing[:, 2::3] = missing[:, :, 0]
+            flat_missing[:, 3::3] = missing[:, :, 1]
+            masked_targets_raw = flat_raw[eye_masked]
+            masked_missing = flat_missing[eye_masked]
+            prediction = self.pred_head(masked_hidden).reshape(
+                -1, 4, self.patch_samples
+            )
+            continuous_loss, blink_loss, valid = raw_patch_reconstruction_losses(
+                prediction, masked_targets_raw, masked_missing
+            )
+            per_token_loss = (
+                self.raw_continuous_weight * continuous_loss
+                + self.raw_blink_weight * blink_loss
+            )
+            loss, n_supervised_trials = mean_masked_loss_per_trial(
+                per_token_loss, masked_trial_indices, B
+            )
+            with torch.no_grad():
+                blink_prediction = prediction[:, 3, :] >= 0
+                blink_target = masked_targets_raw[:, 3, :] >= 0.5
+                accuracy = (
+                    ((blink_prediction == blink_target) & valid).sum()
+                    / valid.sum().clamp_min(1)
+                )
+            return loss, {
+                "bert_loss": loss.detach(),
+                "bert_acc": accuracy,
+                "n_masked": eye_masked.sum(),
+                "n_supervised_trials": n_supervised_trials,
+                "per_token_loss": per_token_loss.detach(),
+                "raw_continuous_loss": continuous_loss.mean().detach(),
+                "raw_blink_loss": blink_loss.mean().detach(),
+            }
+
+        if eye_code_ids is None:
+            raise ValueError(f"eye_code_ids are required for target_type={self.target_type}")
+        flat_targets = torch.zeros(B, total_len, dtype=torch.long, device=device)
+        flat_targets[:, 2::3] = eye_code_ids[:, :, 0]
+        flat_targets[:, 3::3] = eye_code_ids[:, :, 1]
+        masked_targets = flat_targets[eye_masked]
 
         ce_kwargs = dict(label_smoothing=self.label_smoothing)
 

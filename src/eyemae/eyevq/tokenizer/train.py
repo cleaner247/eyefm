@@ -350,7 +350,7 @@ def kmeans_init_codebook(
         for li in (fsq_L_val if isinstance(fsq_L_val, list) else [fsq_L_val]):
             K_eye *= int(li)
         D_eye = int(vq_cfg["fsq_d"])
-    elif vq_cfg.get("type") == "vq":
+    elif vq_cfg.get("type") in {"vq", "vqvae"}:
         K_eye = int(vq_cfg.get("codebook_size", 8192))
         D_eye = int(vq_cfg.get("code_dim", 128))
     else:

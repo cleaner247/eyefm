@@ -55,6 +55,7 @@ from eyemae.eyevq.pretrain.masking import (
     generate_eyemae_mask,
     paired_time_eligibility,
 )
+from eyemae.eyevq.pretrain.model import TARGET_RAW_PATCH
 from eyemae.eyevq.optim import build_adamw_param_groups
 from eyemae.eyevq.artifacts import (
     CACHE_FORMAT_VERSION,
@@ -266,32 +267,46 @@ def train_bert(
     data_path = train_cfg["data_path"]
     train_index = str(Path(data_path) / train_cfg.get("train_index", "pretrain/pretrain_train.csv"))
     area_stats_path = train_cfg.get("area_stats_path", "outputs/area_stats_v3_tokenizer.json")
-    tokenizer_ckpt = train_cfg["tokenizer_checkpoint"]
+    target_type = str(
+        cfg.get("bert", {}).get(
+            "target_type",
+            "factorized_code"
+            if bool(cfg.get("bert", {}).get("factorized_fsq", False))
+            else "joint_code",
+        )
+    )
+    uses_code_targets = target_type != TARGET_RAW_PATCH
+    tokenizer_ckpt = train_cfg.get("tokenizer_checkpoint")
     mask_cfg = cfg.get("mask", {})
 
     cache_split = str(train_cfg.get("code_ids_cache_split", "all"))
-    cache_contract_sha256 = sha256_json(cache_contract(cfg, split=cache_split))
+    cache_contract_sha256 = (
+        sha256_json(cache_contract(cfg, split=cache_split)) if uses_code_targets else None
+    )
     identity_payload = None
     if rank == 0:
-        identity_payload = build_run_identity(
-            "bert",
-            cfg,
-            dependencies={
+        dependencies = {}
+        if uses_code_targets:
+            dependencies = {
                 "tokenizer_checkpoint": tokenizer_ckpt,
-                "code_ids_cache": train_cfg["code_ids_cache"],
-            },
-        )
-        validate_cache_identity(
-            train_cfg["code_ids_cache"],
-            tokenizer_checkpoint=tokenizer_ckpt,
-            contract_sha256=cache_contract_sha256,
-        )
+                "code_ids_cache": train_cfg.get("code_ids_cache"),
+            }
+        identity_payload = build_run_identity("bert", cfg, dependencies=dependencies)
+        if uses_code_targets:
+            validate_cache_identity(
+                train_cfg["code_ids_cache"],
+                tokenizer_checkpoint=tokenizer_ckpt,
+                contract_sha256=cache_contract_sha256,
+            )
     if world_size > 1:
         objects = [identity_payload]
         dist.broadcast_object_list(objects, src=0)
         identity_payload = objects[0]
     run_identity = identity_payload
-    tokenizer_sha256 = run_identity["dependencies"]["tokenizer_checkpoint"]["sha256"]
+    tokenizer_sha256 = (
+        run_identity["dependencies"]["tokenizer_checkpoint"]["sha256"]
+        if uses_code_targets else None
+    )
 
     if is_rank0():
         logger.info(f"Config: {cfg.get('_config_path', 'N/A')}")
@@ -335,26 +350,32 @@ def train_bert(
         logger.info(f"Training trials: {len(dataset)}")
 
     code_ids_cache = train_cfg.get("code_ids_cache")
-    if not code_ids_cache:
-        raise ValueError(
-            "train.code_ids_cache is required. BERT training never loads or calls the tokenizer."
+    gid_to_idx, codes_arr = None, None
+    if uses_code_targets:
+        if not tokenizer_ckpt:
+            raise ValueError("train.tokenizer_checkpoint is required for code targets")
+        if not code_ids_cache:
+            raise ValueError(
+                "train.code_ids_cache is required for code targets. BERT never calls the tokenizer."
+            )
+        if not Path(code_ids_cache).is_file():
+            raise FileNotFoundError(
+                f"Code-ID cache does not exist: {code_ids_cache}. "
+                "Run python -m eyemae.eyevq.precompute_codes before BERT training."
+            )
+        gid_to_idx, codes_arr = load_code_ids_cache(
+            code_ids_cache,
+            patch_samples=patch_samples,
+            tokenizer_checkpoint=tokenizer_ckpt,
+            tokenizer_sha256=tokenizer_sha256,
+            contract_sha256=cache_contract_sha256,
+            validate_identity=False,
         )
-    if not Path(code_ids_cache).is_file():
-        raise FileNotFoundError(
-            f"Code-ID cache does not exist: {code_ids_cache}. "
-            "Run python -m eyemae.eyevq.precompute_codes before BERT training."
-        )
-    gid_to_idx, codes_arr = load_code_ids_cache(
-        code_ids_cache,
-        patch_samples=patch_samples,
-        tokenizer_checkpoint=tokenizer_ckpt,
-        tokenizer_sha256=tokenizer_sha256,
-        contract_sha256=cache_contract_sha256,
-        validate_identity=False,
-    )
-    if is_rank0():
-        logger.info(f"Code-ID cache loaded: {len(gid_to_idx):,} trials from {code_ids_cache}")
-        logger.info("Tokenizer is not constructed in the BERT process")
+        if is_rank0():
+            logger.info(f"Code-ID cache loaded: {len(gid_to_idx):,} trials from {code_ids_cache}")
+            logger.info("Tokenizer is not constructed in the BERT process")
+    elif is_rank0():
+        logger.info("Target: raw_patch; tokenizer and code-ID cache are not used")
 
     # ── 2. DataLoader ──
     max_tokens = int(train_cfg.get("max_seq_tokens_per_gpu", 393216))
@@ -401,6 +422,7 @@ def train_bert(
     # ── Resume from checkpoint (必须在 torch.compile 之前加载, 避免 _orig_mod. key 不匹配) ──
     resume_step = 0
     resume_best_val_acc = -1.0
+    resume_best_val_loss = float("inf")
     if resume_from is not None:
         if is_rank0():
             logger.info(f"Resuming from {resume_from}")
@@ -423,6 +445,7 @@ def train_bert(
             logger.info("Resume: 全部权重加载成功")
         resume_step = int(ck.get("step", 0))
         resume_best_val_acc = float(ck.get("best_val_acc", -1.0))
+        resume_best_val_loss = float(ck.get("best_val_loss", float("inf")))
         if is_rank0():
             logger.info(f"Resumed at step={resume_step}")
     # torch.compile — disabled for compatibility
@@ -557,8 +580,9 @@ def train_bert(
             v_nm = val_batch["eye_nonmissing_frac"]
             v_task = val_batch["task_id"]
             v_valid = v_nm >= min_nonmissing
-            v_code_ids = lookup_code_ids(
-                val_batch, gid_to_idx, codes_arr, device, max_patches
+            v_code_ids = (
+                lookup_code_ids(val_batch, gid_to_idx, codes_arr, device, max_patches)
+                if uses_code_targets else None
             )
             v_mask_output = generate_eyemae_mask(
                 v_valid,
@@ -737,9 +761,11 @@ def train_bert(
         # 从加载的 ckpt 恢复步数 (已在 optimizer 加载时设置 resume_step)
         global_step = resume_step
         best_val_acc = resume_best_val_acc
+        best_val_loss = resume_best_val_loss
     else:
         global_step = 0
         best_val_acc = -1.0
+        best_val_loss = float("inf")
     sampler.set_start_batch(global_step)
     total_loss = torch.zeros((), device=device)
     total_acc = torch.zeros((), device=device)
@@ -778,8 +804,9 @@ def train_bert(
             task_ids = batch["task_id"]                                 # [B]
 
             # ── 1. Read precomputed labels; no tokenizer exists in this process ──
-            eye_code_ids = lookup_code_ids(
-                batch, gid_to_idx, codes_arr, device, max_patches
+            eye_code_ids = (
+                lookup_code_ids(batch, gid_to_idx, codes_arr, device, max_patches)
+                if uses_code_targets else None
             )
 
             # ── 2. Mask jointly valid L/R tokens at the same time patches ──
@@ -967,9 +994,17 @@ def train_bert(
             # ── Save checkpoint (every save_every steps) ──
             if is_rank0() and global_step % save_every == 0 and global_step > 0:
                 ckpt_path = output_dir / f"ckpt_step{global_step:06d}.pt"
-                improved = bool(val_metrics and val_metrics["val/acc"] > best_val_acc)
+                improved = bool(
+                    val_metrics
+                    and (
+                        val_metrics["val/loss"] < best_val_loss
+                        if target_type == TARGET_RAW_PATCH
+                        else val_metrics["val/acc"] > best_val_acc
+                    )
+                )
                 if improved:
                     best_val_acc = val_metrics["val/acc"]
+                    best_val_loss = val_metrics["val/loss"]
                 state = {
                     "step": global_step,
                     "model_state_dict": raw_model.state_dict(),
@@ -979,6 +1014,7 @@ def train_bert(
                     "run_identity": run_identity,
                     "val_metrics": val_metrics,
                     "best_val_acc": best_val_acc,
+                    "best_val_loss": best_val_loss,
                     "rng_states": {
                         "python": __import__("random").getstate(),
                         "numpy": np.random.get_state(),
@@ -993,7 +1029,12 @@ def train_bert(
                 if improved:
                     best_path = output_dir / "ckpt_best.pt"
                     atomic_torch_save(state, best_path)
-                    logger.info(f"🏆 New best: val/acc={best_val_acc:.4f}")
+                    selection = (
+                        f"val/loss={best_val_loss:.5f}"
+                        if target_type == TARGET_RAW_PATCH
+                        else f"val/acc={best_val_acc:.4f}"
+                    )
+                    logger.info(f"🏆 New best: {selection}")
 
             if world_size > 1 and global_step % save_every == 0 and global_step > 0:
                 dist.barrier()
@@ -1017,8 +1058,14 @@ def train_bert(
                     if isinstance(value, (int, float))
                 )
             )
-            if final_val_metrics["val/acc"] > best_val_acc:
+            final_improved = (
+                final_val_metrics["val/loss"] < best_val_loss
+                if target_type == TARGET_RAW_PATCH
+                else final_val_metrics["val/acc"] > best_val_acc
+            )
+            if final_improved:
                 best_val_acc = final_val_metrics["val/acc"]
+                best_val_loss = final_val_metrics["val/loss"]
                 atomic_torch_save({
                     "step": global_step,
                     "model_state_dict": raw_model.state_dict(),
@@ -1028,6 +1075,7 @@ def train_bert(
                     "run_identity": run_identity,
                     "val_metrics": final_val_metrics,
                     "best_val_acc": best_val_acc,
+                    "best_val_loss": best_val_loss,
                 }, output_dir / "ckpt_best.pt")
         final_path = output_dir / "ckpt_final.pt"
         atomic_torch_save({
@@ -1039,6 +1087,7 @@ def train_bert(
             "run_identity": run_identity,
             "val_metrics": final_val_metrics,
             "best_val_acc": best_val_acc,
+            "best_val_loss": best_val_loss,
         }, final_path)
         logger.info(f"Done. Steps: {global_step}. Final: {final_path}")
 

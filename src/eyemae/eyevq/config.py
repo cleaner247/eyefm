@@ -9,7 +9,13 @@ from typing import Any
 
 import torch
 
-from .pretrain.model import EyeVQBERT
+from .pretrain.model import (
+    EyeVQBERT,
+    SUPPORTED_TARGET_TYPES,
+    TARGET_FACTORIZED_CODE,
+    TARGET_JOINT_CODE,
+    TARGET_RAW_PATCH,
+)
 from .tokenizer.model import EyeVQTokenizer
 
 
@@ -32,20 +38,23 @@ def override_fsq_levels(cfg: dict[str, Any], levels_text: str | None) -> None:
     cfg["vq"]["fsq_L"] = levels
 
 
-def _fsq_spec(cfg: dict[str, Any]) -> tuple[str, int, int, int | list[int]]:
+def _quantizer_spec(cfg: dict[str, Any]) -> tuple[str, int, int, list[int] | None]:
     vq = cfg["vq"]
     vq_type = str(vq.get("type", "fsq"))
-    if vq_type != "fsq":
-        raise ValueError(
-            f"Unsupported vq.type={vq_type!r}; canonical EyeVQ uses finite scalar quantization"
-        )
-    code_dim = int(vq["fsq_d"])
-    levels = vq["fsq_L"]
-    levels_list = [int(levels)] * code_dim if isinstance(levels, int) else [int(v) for v in levels]
-    if len(levels_list) != code_dim:
-        raise ValueError(f"vq.fsq_L has {len(levels_list)} dimensions, expected {code_dim}")
-    codebook_size = math.prod(levels_list)
-    return vq_type, code_dim, codebook_size, levels_list
+    if vq_type == "fsq":
+        code_dim = int(vq["fsq_d"])
+        levels = vq["fsq_L"]
+        levels_list = [int(levels)] * code_dim if isinstance(levels, int) else [int(v) for v in levels]
+        if len(levels_list) != code_dim:
+            raise ValueError(f"vq.fsq_L has {len(levels_list)} dimensions, expected {code_dim}")
+        return vq_type, code_dim, math.prod(levels_list), levels_list
+    if vq_type == "vqvae":
+        return vq_type, int(vq["code_dim"]), int(vq["codebook_size"]), None
+    raise ValueError(f"Unsupported vq.type={vq_type!r}; expected 'fsq' or 'vqvae'")
+
+
+# Kept as a private compatibility alias for older callers.
+_fsq_spec = _quantizer_spec
 
 
 def tokenizer_architecture(cfg: dict[str, Any]) -> str:
@@ -86,7 +95,7 @@ def validate_tokenizer_config(cfg: dict[str, Any]) -> None:
         raise ValueError("encoder.d_model and decoder.d_model must match")
     if int(cfg["patch"]["samples"]) != int(cfg["patch"].get("stride", cfg["patch"]["samples"])):
         raise ValueError("EyeVQ currently requires non-overlapping patches (samples == stride)")
-    vq_type, _code_dim, _codebook_size, levels = _fsq_spec(cfg)
+    vq_type, code_dim, codebook_size, levels = _quantizer_spec(cfg)
     if vq_type == "fsq":
         if any(int(level) % 2 == 0 for level in levels):
             raise ValueError("EyeVQ FSQ/iFSQ currently requires odd levels")
@@ -99,6 +108,12 @@ def validate_tokenizer_config(cfg: dict[str, Any]) -> None:
         alpha = float(cfg["vq"].get("ifsq_alpha", 1.6))
         if not math.isfinite(alpha) or alpha <= 0:
             raise ValueError(f"vq.ifsq_alpha must be finite and positive, got {alpha}")
+    else:
+        if code_dim < 1 or codebook_size < 2:
+            raise ValueError("VQ-VAE requires vq.code_dim >= 1 and vq.codebook_size >= 2")
+        beta = float(cfg["vq"].get("commitment_beta", 0.25))
+        if not math.isfinite(beta) or beta < 0:
+            raise ValueError("vq.commitment_beta must be finite and non-negative")
     tokenizer_architecture(cfg)
 
 
@@ -109,7 +124,7 @@ def build_tokenizer(cfg: dict[str, Any]) -> EyeVQTokenizer:
     vq = cfg["vq"]
     features = cfg["manual_features"]
     architecture = tokenizer_architecture(cfg)
-    vq_type, code_dim, codebook_size, levels = _fsq_spec(cfg)
+    vq_type, code_dim, codebook_size, levels = _quantizer_spec(cfg)
     return EyeVQTokenizer(
         d_model=int(encoder["d_model"]),
         enc_n_layers=int(encoder["n_layers"]),
@@ -118,9 +133,10 @@ def build_tokenizer(cfg: dict[str, Any]) -> EyeVQTokenizer:
         vq_type=vq_type,
         eye_code_dim=code_dim,
         eye_codebook_size=codebook_size,
-        fsq_L=levels,
+        fsq_L=levels if levels is not None else 5,
         fsq_activation=str(vq.get("fsq_activation", "tanh")),
         ifsq_alpha=float(vq.get("ifsq_alpha", 1.6)),
+        commitment_beta=float(vq.get("commitment_beta", 0.25)),
         dec_n_layers=int(decoder["n_layers"]),
         dec_n_heads=int(decoder["n_heads"]),
         dec_dim_ff=int(decoder["dim_ff"]),
@@ -156,9 +172,27 @@ def validate_bert_config(cfg: dict[str, Any]) -> None:
         raise ValueError("bert.max_time and bert.max_patches must match")
     if int(cfg["patch"]["samples"]) != int(cfg["patch"].get("stride", cfg["patch"]["samples"])):
         raise ValueError("EyeVQ pretraining requires non-overlapping patches")
-    vq_type, _code_dim, _codebook_size, _levels = _fsq_spec(cfg)
-    if bool(bert.get("factorized_fsq", False)) and vq_type != "fsq":
+    vq_type, _code_dim, _codebook_size, _levels = _quantizer_spec(cfg)
+    factorized = bool(bert.get("factorized_fsq", False))
+    target_type = str(
+        bert.get(
+            "target_type",
+            TARGET_FACTORIZED_CODE if factorized else TARGET_JOINT_CODE,
+        )
+    )
+    if target_type not in SUPPORTED_TARGET_TYPES:
+        raise ValueError(
+            f"bert.target_type must be one of {sorted(SUPPORTED_TARGET_TYPES)}"
+        )
+    if factorized and vq_type != "fsq":
         raise ValueError("bert.factorized_fsq requires vq.type=fsq")
+    if (target_type == TARGET_FACTORIZED_CODE) != factorized:
+        raise ValueError("factorized_code target and bert.factorized_fsq must be enabled together")
+    if target_type == TARGET_RAW_PATCH:
+        for key in ("raw_continuous_weight", "raw_blink_weight"):
+            value = float(cfg["loss"].get(key, 1.0))
+            if not math.isfinite(value) or value < 0:
+                raise ValueError(f"loss.{key} must be finite and non-negative")
     mode = str(cfg["mask"].get("mode", "paired_random"))
     supported_modes = {"uniform", "paired_random", "paired_span", "paired_multiblock"}
     if mode not in supported_modes:
@@ -229,7 +263,7 @@ def validate_bert_config(cfg: dict[str, Any]) -> None:
 def build_bert(cfg: dict[str, Any]) -> EyeVQBERT:
     validate_bert_config(cfg)
     bert = cfg["bert"]
-    vq_type, _code_dim, codebook_size, levels = _fsq_spec(cfg)
+    vq_type, _code_dim, codebook_size, levels = _quantizer_spec(cfg)
     fsq_levels = levels if vq_type == "fsq" and isinstance(levels, list) else None
     return EyeVQBERT(
         K_e=codebook_size,
@@ -250,6 +284,16 @@ def build_bert(cfg: dict[str, Any]) -> EyeVQBERT:
             bert.get("predictor_span_length_embedding", False)
         ),
         max_mask_span_length=int(cfg["mask"].get("span_max_patches", 0)),
+        target_type=str(
+            bert.get(
+                "target_type",
+                TARGET_FACTORIZED_CODE
+                if bool(bert.get("factorized_fsq", False))
+                else TARGET_JOINT_CODE,
+            )
+        ),
+        raw_continuous_weight=float(cfg["loss"].get("raw_continuous_weight", 1.0)),
+        raw_blink_weight=float(cfg["loss"].get("raw_blink_weight", 1.0)),
     )
 
 

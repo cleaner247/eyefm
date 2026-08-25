@@ -19,6 +19,7 @@ import torch.nn.functional as F
 from typing import Optional
 
 from eyemae.eyevq.tokenizer.fsq import FSQ
+from eyemae.eyevq.tokenizer.vqvae import VQVAEQuantizer
 
 
 # ──────────────────────────────────────────────
@@ -852,6 +853,7 @@ class EyeVQTokenizer(nn.Module):
         fsq_L: int | list = 5,
         fsq_activation: str = "tanh",      # "ifsq" or legacy "tanh"
         ifsq_alpha: float = 1.6,
+        commitment_beta: float = 0.25,
         # Decoder
         dec_n_layers: int = 3,
         dec_n_heads: int = 8,
@@ -890,16 +892,22 @@ class EyeVQTokenizer(nn.Module):
             min_nonmissing_frac=min_nonmissing_frac,
         )
 
-        if vq_type != "fsq":
-            raise ValueError("EyeVQTokenizer supports only vq_type='fsq'")
-        # Fixed, parameter-free finite scalar quantization.
         self.vq_proj = VQProjection(d_model=d_model, fsq_d=eye_code_dim)
-        self.eye_codebook = FSQ(
-            d=eye_code_dim,
-            L=fsq_L,
-            activation=fsq_activation,
-            ifsq_alpha=ifsq_alpha,
-        )
+        if vq_type == "fsq":
+            self.eye_codebook = FSQ(
+                d=eye_code_dim,
+                L=fsq_L,
+                activation=fsq_activation,
+                ifsq_alpha=ifsq_alpha,
+            )
+        elif vq_type == "vqvae":
+            self.eye_codebook = VQVAEQuantizer(
+                d=eye_code_dim,
+                codebook_size=eye_codebook_size,
+                commitment_beta=commitment_beta,
+            )
+        else:
+            raise ValueError(f"Unsupported vq_type={vq_type!r}")
 
         if is_cross:
             self.recon_decoder = ViTDecoder(

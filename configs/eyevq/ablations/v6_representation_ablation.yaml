@@ -1,0 +1,124 @@
+version: 1
+description: V6 staged representation ablation; validation selects, test is confirmatory only.
+base:
+  tokenizer_config: configs/eyevq/final/tokenizer.yaml
+  bert_config: configs/eyevq/final/bert.yaml
+  mci_config: configs/eyevq/final/mci.yaml
+  pd5_config: configs/eyevq/final/pd5.yaml
+  tokenizer_checkpoint: outputs/eyevq/v6_fsq9755_mask050_span1to6_symmetric_k16_lr2e4_pipeline_20260825/tokenizer/ckpt_final.pt
+  code_ids_cache: outputs/eyevq/v6_fsq9755_mask050_span1to6_symmetric_k16_lr2e4_pipeline_20260825/code_cache/code_ids_train_val.npz
+  output_root: outputs/eyevq/v6_representation_ablation
+
+execution:
+  gpu_ids: "0,1,2,3"
+  nproc_per_node: 4
+  screen_bert_steps: 15000
+  confirm_bert_steps: 50000
+  screen_tokenizer_steps: 20000
+  confirm_tokenizer_steps: 40000
+  screen_downstream_epochs: 50
+  confirm_downstream_epochs: 100
+  screen_seeds: [42]
+  confirm_seeds: [42, 43, 44]
+
+# Candidates in the same group change only the named axis.  Do not form their
+# Cartesian product: first choose masking, then targets, then quantizers.
+candidates:
+  - name: mask_span15_r040
+    group: mask
+    bert:
+      mask.mode: paired_span
+      mask.eye_masking_ratio: 0.40
+      mask.span_min_patches: 1
+      mask.span_max_patches: 5
+      mask.span_length_distribution: uniform
+  - name: mask_span15_r050
+    group: mask
+    bert:
+      mask.mode: paired_span
+      mask.eye_masking_ratio: 0.50
+      mask.span_min_patches: 1
+      mask.span_max_patches: 5
+      mask.span_length_distribution: uniform
+  - name: mask_span15_r060
+    group: mask
+    bert:
+      mask.mode: paired_span
+      mask.eye_masking_ratio: 0.60
+      mask.span_min_patches: 1
+      mask.span_max_patches: 5
+      mask.span_length_distribution: uniform
+  - name: mask_random_r050
+    group: mask
+    bert:
+      mask.mode: paired_random
+      mask.eye_masking_ratio: 0.50
+      bert.predictor_span_length_embedding: false
+  - name: mask_random_r060
+    group: mask
+    bert:
+      mask.mode: paired_random
+      mask.eye_masking_ratio: 0.60
+      bert.predictor_span_length_embedding: false
+  - name: mask_span16_symmetric_r050
+    group: mask
+    bert:
+      mask.mode: paired_span
+      mask.eye_masking_ratio: 0.50
+      mask.span_min_patches: 1
+      mask.span_max_patches: 6
+      mask.span_length_distribution: symmetric_power
+      mask.span_length_power: 1.0
+
+  - name: target_raw_patch
+    group: target
+    no_tokenizer: true
+    bert:
+      bert.target_type: raw_patch
+      bert.factorized_fsq: false
+      loss.raw_continuous_weight: 1.0
+      loss.raw_blink_weight: 0.1
+  - name: target_joint_code
+    group: target
+    bert:
+      bert.target_type: joint_code
+      bert.factorized_fsq: false
+  - name: target_factorized_code
+    group: target
+    bert:
+      bert.target_type: factorized_code
+      bert.factorized_fsq: true
+
+  - name: quantizer_ifsq9755
+    group: quantizer
+    retrain_tokenizer: true
+    tokenizer:
+      vq.fsq_activation: ifsq
+      vq.ifsq_alpha: 1.6
+    bert:
+      vq.fsq_activation: ifsq
+  - name: quantizer_fsq97755
+    group: quantizer
+    retrain_tokenizer: true
+    tokenizer:
+      vq.fsq_d: 5
+      vq.fsq_L: [9, 7, 7, 5, 5]
+    bert:
+      vq.fsq_d: 5
+      vq.fsq_L: [9, 7, 7, 5, 5]
+  - name: quantizer_vqvae1575
+    group: quantizer
+    retrain_tokenizer: true
+    tokenizer:
+      vq.type: vqvae
+      vq.code_dim: 4
+      vq.codebook_size: 1575
+      vq.commitment_beta: 0.25
+      loss.eye_commit_group_weight: 1.0
+      train.stage_a_steps: 1000
+    bert:
+      vq.type: vqvae
+      vq.code_dim: 4
+      vq.codebook_size: 1575
+      bert.target_type: joint_code
+      bert.factorized_fsq: false

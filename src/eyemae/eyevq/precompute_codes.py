@@ -31,7 +31,11 @@ from eyemae.data import (
     read_packed_index,
     validate_area_normalization_contract,
 )
-from eyemae.eyevq.config import load_tokenizer_checkpoint, override_fsq_levels
+from eyemae.eyevq.config import (
+    _quantizer_spec,
+    load_tokenizer_checkpoint,
+    override_fsq_levels,
+)
 from eyemae.eyevq.artifacts import (
     CACHE_FORMAT_VERSION,
     cache_contract,
@@ -63,9 +67,13 @@ def load_tokenizer_for_cache(checkpoint_path, cfg, device, pretrain_cfg):
             f"Tokenizer patch.samples={actual_patch} does not match pretrain "
             f"patch.samples={expected_patch}"
         )
-    for key in ("type", "fsq_d", "fsq_L"):
-        if tokenizer_cfg["vq"].get(key) != cfg["vq"].get(key):
-            raise ValueError(f"Pretrain vq.{key} does not match the tokenizer checkpoint")
+    tokenizer_spec = _quantizer_spec(tokenizer_cfg)
+    pretrain_spec = _quantizer_spec(cfg)
+    if tokenizer_spec != pretrain_spec:
+        raise ValueError(
+            "Pretrain quantizer does not match the tokenizer checkpoint: "
+            f"{pretrain_spec} != {tokenizer_spec}"
+        )
     if int(checkpoint.get("step", -1)) < 0:
         raise ValueError("Tokenizer checkpoint has no valid training step")
     return tokenizer
