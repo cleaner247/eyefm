@@ -390,6 +390,8 @@ def compute_packed_area_stats(cfg: dict[str, Any], split: str = "train", out: st
         "global_by_eye": global_by_eye,
         "subjects": {},
         "source": {
+            "scope": str(cfg["area"].get("source_scope", "unspecified")),
+            "normalization_scope": "per_subject_eye_median_mad",
             "format": "packed_mmap",
             "index": str(index_file),
             "num_subjects": len(grouped),

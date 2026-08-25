@@ -15,6 +15,9 @@ label:
   missing_value: 2
 
 area:
+  # The index contains every unlabeled pretraining subject; downstream may
+  # reuse these exact transductive statistics but must never recompute them.
+  source_scope: all_pretraining_subjects_unlabeled
   use_log1p: false
   per_eye: true
   robust_zscore_by: subject_eye
