@@ -8,7 +8,7 @@ defaults.
 ## Canonical pipeline
 
 ```text
-V4 packed trials
+V6 packed trials
   -> valid-eye filtering + per-subject/per-eye median-MAD area normalization
   -> non-overlapping 40-sample stimulus/left/right patches
   -> 12-layer joint stimulus-isolated tokenizer
@@ -30,15 +30,15 @@ The single source of truth is:
 - `configs/eyevq/final/mci.yaml`: MCI K16 subject adaptation.
 - `configs/eyevq/final/pd5.yaml`: PD5 K16 subject adaptation.
 
-V4 is the current validation-selected internal reference. Existing V5 and V6
-packed payloads are bitwise identical and inherit V5's additional guarded
-75-Hz filtering stage; they are experimental and are not silently treated as a
-raw/no-filter data revision.
+V6 is the operational default dataset. It repacks the V5 payload without adding
+another filter, preserves the established splits and source frame labels, and
+therefore inherits the guarded 75-Hz filtering already present in V5. Its area
+statistics and manual features were recomputed from V6 and are SHA-pinned.
 
-The currently running V6 job is an experimental candidate, not a silent change
-to this reference. Its resolved configuration and logs live under its output
-directory. A local experiment script is not a supported entry point unless it
-has been promoted into `configs/eyevq/final/` and passes the canonical preflight.
+The currently running V6 job also tests a different BERT masking candidate. Its
+resolved configuration and logs live under its output directory; that mask
+candidate does not replace the default model geometry until validation is
+complete.
 
 ## Run
 

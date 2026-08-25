@@ -39,9 +39,9 @@ area:
 manual_features:
   enabled: true
   num_features: 38
-  cache_path: outputs/eyevq/v4_shared/manual_features/trial_metrics_38d_train_val.pt
-  stats_path: outputs/eyevq/v4_shared/manual_features/trial_metric_stats_38d_train.json
-  task_metric_weight_path: outputs/eyevq/v4_shared/manual_features/train.pt
+  cache_path: outputs/eyevq/v6_shared/manual_features/trial_metrics_38d_train_val.pt
+  stats_path: outputs/eyevq/v6_shared/manual_features/trial_metric_stats_38d_train.json
+  task_metric_weight_path: outputs/eyevq/v6_shared/manual_features/train.pt
 loss:
   eye_xy_weight: 1.0
   eye_area_weight: 0.1
@@ -60,8 +60,9 @@ train:
   precision: bf16
   compile_model: false
   kaiming_init: true
-  lr: 3.0e-4
-  min_lr: 3.0e-5
+  # V6 non-collapse pilot selected this lower schedule.
+  lr: 2.0e-4
+  min_lr: 2.0e-5
   betas: [0.9, 0.95]
   weight_decay: 0.01
   grad_clip: 1.0
@@ -74,9 +75,9 @@ train:
   save_every_steps: 2500
   max_val_batches: null
   max_trials_per_gpu: 128
-  data_path: /mnt/disk_sde/hjf/eyemae_fast_dataset_v4/pretrain
+  data_path: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/pretrain
   train_index: pretrain/pretrain_train.csv
   val_index: pretrain/pretrain_validation.csv
   require_any_eye_keep: true
-  area_stats_path: outputs/eyevq/v4_shared/area_stats_per_subject_eye_all_seed42.json
+  area_stats_path: outputs/eyevq/v6_shared/area_stats_per_subject_eye_all_seed42.json
   num_workers: 4

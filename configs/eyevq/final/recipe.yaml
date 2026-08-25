@@ -1,20 +1,22 @@
-recipe_version: 1
-status: validation_selected_internal_reference
-selection_policy: validation_only
+recipe_version: 2
+status: v6_operational_default_downstream_validation_pending
+selection_policy: validation_only_for_model_selection
 test_status: historically_observed_internal_exploration
 
 dataset:
-  version: eyemae_fast_dataset_v4
-  root: /mnt/disk_sde/hjf/eyemae_fast_dataset_v4
-  shared_artifacts: outputs/eyevq/v4_shared
-  manifest_sha256: ae46fe82f2821e6c5e4040aed96555e24862bc6184e8f26a103fc4e79aaec14b
-  build_audit: /mnt/disk_sde/hjf/eyemae_fast_dataset_v4/v4_all_highfreq_area_filter_summary.json
-  build_audit_sha256: dcc2487d292716bca560e8e8cb17403c7d6ab858760d23b41d3add7da04f2134
+  version: eyemae_fast_dataset_v6
+  root: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6
+  shared_artifacts: outputs/eyevq/v6_shared
+  shared_artifact_manifest: outputs/eyevq/v6_shared/artifact_manifest.json
+  shared_artifact_manifest_sha256: 9ae7c94c864d3f41cb46a11a33f03e33a9658df3ba2e65ac73854fd3dcd2cbc5
+  manifest_sha256: a50d59ea13c885371349b4478ea1c7dacd6a89f1dd3005afd72c11856cc0cfe1
+  build_audit: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/v6_build_audit.json
+  build_audit_sha256: 8ab9ad8d6770c71c71752651cb1a7f263f19f99dddbc0d29123616382cee664d
   rationale: >-
-    V4 is the latest data version with completed comparable validation evidence
-    for both MCI and PD5. Current V5 and V6 payloads are identical and inherit
-    an additional guarded 75-Hz filtering stage, so they remain experimental
-    until a direct-from-delivery dataset is rebuilt and revalidated.
+    V6 is the operational default. It is a bitwise repack of the V5 signal
+    payload with established subject/trial splits and source frame labels; the
+    V6 builder adds no filtering, while the payload inherits V5's guarded
+    75-Hz filter. Area statistics and manual features were recomputed from V6.
 
 architecture:
   tokenizer: joint_stimulus_isolated_self_attention
@@ -27,8 +29,9 @@ architecture:
 
 quality_gates:
   tokenizer:
-    max_val_eye_loss: 0.00035
-    max_val_feature_loss: 0.12
+    # V6 scale, calibrated against the completed non-collapsed 40K run.
+    max_val_eye_loss: 0.0017
+    max_val_feature_loss: 0.18
     min_active_codes: 1200
     min_code_perplexity: 500
     max_top1_code_frequency: 0.03

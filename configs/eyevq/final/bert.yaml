@@ -54,11 +54,11 @@ train:
   val_every_steps: 5000
   max_val_batches: null
   save_every_steps: 5000
-  data_path: /mnt/disk_sde/hjf/eyemae_fast_dataset_v4/pretrain
+  data_path: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/pretrain
   train_index: pretrain/pretrain_train.csv
   val_index: pretrain/pretrain_validation.csv
   require_any_eye_keep: true
-  area_stats_path: outputs/eyevq/v4_shared/area_stats_per_subject_eye_all_seed42.json
+  area_stats_path: outputs/eyevq/v6_shared/area_stats_per_subject_eye_all_seed42.json
   tokenizer_checkpoint: outputs/eyevq/final/tokenizer/ckpt_final.pt
   code_ids_cache: outputs/eyevq/final/cache/code_ids_train_val.npz
   code_ids_cache_split: all

@@ -40,7 +40,7 @@ def test_formal_recipe_uses_unified_k16_task_bags() -> None:
     recipe = load("recipe.yaml")
     mci = load("mci.yaml")
     pd5 = load("pd5.yaml")
-    assert recipe["selection_policy"] == "validation_only"
+    assert recipe["selection_policy"] == "validation_only_for_model_selection"
     assert recipe["downstream"]["test_used_for_selection"] is False
     assert mci["mil"]["trials_per_task"] == 16
     assert mci["mil"]["eligibility_min_trials_per_task"] == 16
@@ -48,6 +48,26 @@ def test_formal_recipe_uses_unified_k16_task_bags() -> None:
     assert pd5["mil"]["trials_per_task"] == 16
     assert pd5["mil"]["eligibility_min_trials_per_task"] == 16
     assert pd5["mil"]["evaluation_min_trials_per_task"] == 4
+
+
+def test_formal_recipe_uses_v6_and_v6_derived_artifacts() -> None:
+    recipe = load("recipe.yaml")
+    tokenizer = load("tokenizer.yaml")
+    bert = load("bert.yaml")
+    mci = load("mci.yaml")
+    pd5 = load("pd5.yaml")
+    assert recipe["recipe_version"] == 2
+    assert recipe["dataset"]["version"] == "eyemae_fast_dataset_v6"
+    assert "eyemae_fast_dataset_v6" in tokenizer["train"]["data_path"]
+    assert "v6_shared" in tokenizer["train"]["area_stats_path"]
+    assert "v6_shared" in tokenizer["manual_features"]["cache_path"]
+    assert "eyemae_fast_dataset_v6" in bert["train"]["data_path"]
+    assert "eyemae_fast_dataset_v6" in mci["data"]["data_dir"]
+    assert "eyemae_fast_dataset_v6" in pd5["data"]["data_dir"]
+    assert tokenizer["train"]["lr"] == pytest.approx(2.0e-4)
+    assert tokenizer["train"]["min_lr"] == pytest.approx(2.0e-5)
+    assert recipe["quality_gates"]["tokenizer"]["max_val_eye_loss"] == pytest.approx(0.0017)
+    assert recipe["quality_gates"]["tokenizer"]["max_val_feature_loss"] == pytest.approx(0.18)
 
 
 def test_formal_fsq_has_no_fake_commitment_objective() -> None:

@@ -155,13 +155,28 @@ class Pipeline:
         dataset_root = Path(dataset["root"]).resolve()
         manifest = dataset_root / "pretrain/dataset_manifest.json"
         audit = Path(dataset["build_audit"]).resolve()
+        shared_manifest = (PROJECT_ROOT / dataset["shared_artifact_manifest"]).resolve()
         if sha256_file(manifest) != str(dataset["manifest_sha256"]):
             raise ValueError("Formal dataset manifest SHA256 does not match recipe.yaml")
         if sha256_file(audit) != str(dataset["build_audit_sha256"]):
             raise ValueError("Formal dataset build audit SHA256 does not match recipe.yaml")
+        if sha256_file(shared_manifest) != str(dataset["shared_artifact_manifest_sha256"]):
+            raise ValueError("Formal shared-artifact manifest SHA256 does not match recipe.yaml")
         manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
         if manifest_payload.get("dataset_version") != dataset["version"]:
             raise ValueError("Formal dataset version does not match recipe.yaml")
+        shared_payload = json.loads(shared_manifest.read_text(encoding="utf-8"))
+        if shared_payload.get("dataset") != dataset["version"]:
+            raise ValueError("Shared artifacts belong to a different dataset version")
+        shared_checks = {
+            "area_stats_sha256": shared_payload["area_stats"],
+            "manual_features_cache_sha256": shared_payload["manual_features_cache"],
+            "manual_feature_stats_sha256": shared_payload["manual_feature_stats"],
+            "task_metric_weight_sha256": shared_payload["manual_features_train"],
+        }
+        for digest_key, artifact_path in shared_checks.items():
+            if sha256_file(Path(artifact_path)) != shared_payload[digest_key]:
+                raise ValueError(f"V6 shared artifact SHA256 mismatch: {digest_key}")
 
         validate_tokenizer_config(self.tokenizer_cfg)
         validate_bert_config(self.bert_cfg)
@@ -499,7 +514,7 @@ class Pipeline:
         write_json(self.output_root / "search_summary.json", {
             "selection_uses_test": False,
             "selected": {
-                "data": "V4 validation-selected internal reference",
+                "data": "V6 operational default with pinned V6-derived artifacts",
                 "tokenizer": "40K, joint stimulus-isolated tanh FSQ [9,7,5,5]",
                 "bert": "50K, paired span 1-5 uniform, mask 0.60, factorized heads",
                 "downstream": "top-8, LR 1e-5, MCI/PD5 K16, shared hidden-128 head",

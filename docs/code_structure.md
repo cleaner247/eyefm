@@ -26,16 +26,18 @@ used to infer the current architecture. New candidates stay local until their
 validation-only comparison is complete; promotion means updating all files under
 `configs/eyevq/final/`, their tests and the paper together.
 
-## Stable reference and active candidate
+## Default data, stable geometry and active candidate
 
-- Stable reference: V4, factorized BERT, paired uniform spans 1--5, mask ratio
+- Default dataset: V6 with V6-derived area statistics and manual features. V6
+  applies no new filter while repacking V5 and inherits V5's guarded 75-Hz
+  signal filtering.
+- Stable model geometry: factorized BERT, paired uniform spans 1--5, mask ratio
   0.60, MCI/PD5 K16.
-- Active local candidate on 2026-08-25: V6, paired symmetric spans 1--6, mask
-  ratio 0.50. V6 applies no new filter while repacking V5, but therefore inherits
-  the signal filtering already present in V5.
+- Active masking candidate on 2026-08-25: paired symmetric spans 1--6, mask ratio
+  0.50 on the same V6 dataset.
 
-The active candidate does not replace the stable reference until downstream
-validation is complete. Test metrics never make that promotion decision.
+The active masking candidate does not replace the stable geometry until
+downstream validation is complete. Test metrics never make that decision.
 
 ## Terms
 
@@ -46,5 +48,5 @@ validation is complete. Test metrics never make that promotion decision.
 - **Valid-only mask ratio**: the ratio is computed over time patches where both
   eyes are nonpadding and meet the nonmissing threshold.
 - **Symmetric span distribution**: middle span lengths are more likely than the
-  shortest and longest lengths. It is an experimental V6 choice, not the stable
-  uniform-span reference.
+  shortest and longest lengths. It is an experimental masking choice, not the
+  stable uniform-span geometry.

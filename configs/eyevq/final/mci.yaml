@@ -48,11 +48,11 @@ data:
   pretraining_overlap_policy: allow_unlabeled_target_trials
   area_stats_mode: per_subject_transductive
   require_any_eye_keep: true
-  data_dir: /mnt/disk_sde/hjf/eyemae_fast_dataset_v4/finetune/mci_binary
+  data_dir: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/finetune/mci_binary
   train_index: train.csv
   val_index: validation.csv
   test_index: test.csv
-  area_stats_path: outputs/eyevq/v4_shared/area_stats_per_subject_eye_all_seed42.json
+  area_stats_path: outputs/eyevq/v6_shared/area_stats_per_subject_eye_all_seed42.json
 demographics:
   enabled: true
   fusion: concat_task_cls

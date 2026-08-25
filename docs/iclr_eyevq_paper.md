@@ -245,10 +245,10 @@ are reported but never used to rank a candidate.
 
 | Component | Selected setting | Reason for selection |
 |---|---|---|
-| Data | V4 packed internal reference; inherited trial identities and splits; per-subject/per-eye median-MAD | V4 has the latest completed comparable validation evidence for both tasks. Current V5/V6 payloads are identical and inherit an additional guarded 75-Hz filtering stage, so they remain a provenance-limited experiment rather than the paper default. |
+| Data | V6 packed operational default; established splits; per-subject/per-eye median-MAD | V6 repacks V5 without an additional filtering pass, preserves source frame labels and inherits the guarded 75-Hz filtering already present in V5. Area statistics and manual features are recomputed from V6 and pinned by SHA256. |
 | Patch | 40 samples, stride 40, maximum 128 | Preserves short ocular events without the sequence/memory cost of overlapping patches. |
 | Quantizer | tanh FSQ `[9,7,5,5]` | 1,575 states maintain high usage; `[9,7,7,5,5]` improved one MCI validation run but reduced PD5 validation/balanced accuracy and makes MLM substantially sparser. |
-| Tokenizer optimizer | 40K, 128/GPU, `3e-4→3e-5`, 2K warmup | At 3K, `3e-4` improved both eye and feature validation losses over `2e-4`; `5e-4` gave no gain and worse code usage. Forty thousand steps balances reconstruction improvement against late auxiliary-feature overfit. |
+| Tokenizer optimizer | 40K, 128/GPU, `2e-4→2e-5`, 2K warmup | The V6 non-collapse pilot selected `2e-4`; the lower schedule preserves code usage on the promoted data revision. Forty thousand steps balances reconstruction improvement against late auxiliary-feature overfit. |
 | BERT target | four FSQ-digit CE heads | Provides a useful gradient when one scalar digit is wrong and avoids a sparse 1,575-way exact-only target. |
 | BERT mask | paired span, ratio 0.60, uniform length 1–5 | Prevents cross-eye copying, mixes micro- and mesoscale occlusion, and is the strongest completed validation-selected factorized run across MCI/PD5. |
 | BERT optimizer | 50K, 128/GPU, `3e-4→3e-5`, 2K warmup | Fifty thousand steps is the strongest completed validation reference; 80K lowers MLM CE but has not produced a consistent disease-validation gain. |
