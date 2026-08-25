@@ -183,10 +183,14 @@ class Pipeline:
         for key, value in expected_mask.items():
             if self.bert_cfg["mask"].get(key) != value:
                 raise ValueError(f"Formal BERT mask mismatch for {key}")
-        if self.downstream_cfgs["mci"]["mil"]["trials_per_task"] != 16:
-            raise ValueError("Formal MCI recipe must use K16")
-        if self.downstream_cfgs["pd5"]["mil"]["trials_per_task"] != 4:
-            raise ValueError("Formal PD5 recipe must use validation-supported K4")
+        for task in ("mci", "pd5"):
+            mil = self.downstream_cfgs[task]["mil"]
+            if mil["trials_per_task"] != 16:
+                raise ValueError(f"Formal {task.upper()} recipe must use K16")
+            if mil["eligibility_min_trials_per_task"] != 16:
+                raise ValueError(
+                    f"Formal {task.upper()} training eligibility must require K16"
+                )
 
         expected_pretrain = dataset_root / "pretrain"
         if Path(self.tokenizer_cfg["train"]["data_path"]).resolve() != expected_pretrain:
@@ -498,7 +502,7 @@ class Pipeline:
                 "data": "V4 validation-selected internal reference",
                 "tokenizer": "40K, joint stimulus-isolated tanh FSQ [9,7,5,5]",
                 "bert": "50K, paired span 1-5 uniform, mask 0.60, factorized heads",
-                "downstream": "top-8, LR 1e-5, MCI K16 / PD5 K4, shared hidden-128 head",
+                "downstream": "top-8, LR 1e-5, MCI/PD5 K16, shared hidden-128 head",
             },
             "evidence": "docs/iclr_eyevq_paper.md#41-final-training-recipe-and-parameter-selection",
         })

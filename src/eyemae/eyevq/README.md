@@ -40,9 +40,9 @@ Downstream labels belong to subjects. Embeddings and the bottom four BERT layers
 are frozen; the top eight layers are adapted at `1e-5`. Each trial uses
 `LayerNorm(CLS384) + fold-safe demographics16 -> MLP(400,128,C)`. Trial logits
 are averaged inside each task and the four task logits are averaged uniformly.
-MCI uses K16 because a completed three-seed ablation improved stability; PD5
-retains K4 because K16 has not yet passed an equivalent validation-controlled
-ablation. Validation/test use all available trials after the explicit minimum.
+MCI and PD5 both use K16 training bags: each task contributes 16 distinct trials
+sampled without replacement. Validation/test use all available trials after the
+explicit four-trial minimum.
 
 ## Reproducibility and safety
 

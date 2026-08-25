@@ -28,7 +28,7 @@ The single source of truth is:
 - `configs/eyevq/final/tokenizer.yaml`: tokenizer model and optimization.
 - `configs/eyevq/final/bert.yaml`: contextual pretraining.
 - `configs/eyevq/final/mci.yaml`: MCI K16 subject adaptation.
-- `configs/eyevq/final/pd5.yaml`: PD5 K4 subject adaptation.
+- `configs/eyevq/final/pd5.yaml`: PD5 K16 subject adaptation.
 
 V4 is the current validation-selected internal reference. Existing V5 and V6
 packed payloads are bitwise identical and inherit V5's additional guarded

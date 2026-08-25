@@ -14,8 +14,9 @@ mil:
   task_names: [ProSaccade, AntiSaccade, MemorySaccade, DoubleSaccade]
   subjects_per_gpu: 4
   class_sampling: epoch_shuffle_no_class_quota
-  trials_per_task: 4
-  eligibility_min_trials_per_task: 4
+  # Match MCI: one K16 bag per task, sampled without replacement.
+  trials_per_task: 16
+  eligibility_min_trials_per_task: 16
   evaluation_min_trials_per_task: 4
   train_require_all_tasks: true
   sample_without_replacement: true

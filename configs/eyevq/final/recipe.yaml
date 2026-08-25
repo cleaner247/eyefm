@@ -23,7 +23,7 @@ architecture:
   bert_target: factorized_fsq_cross_entropy
   bert_mask: paired_valid_only_span_1_to_5_uniform_ratio_0.60
   mci_aggregation: strict_four_task_k16_shared_logit_mean
-  pd5_aggregation: strict_four_task_k4_shared_logit_mean
+  pd5_aggregation: strict_four_task_k16_shared_logit_mean
 
 quality_gates:
   tokenizer:

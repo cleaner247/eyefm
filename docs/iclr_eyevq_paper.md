@@ -187,7 +187,8 @@ is in progress; only validation metrics will select the final geometry.
 ### 3.5 Subject-level downstream inference
 
 For each subject and each of four tasks (pro-, anti-, memory- and double-saccade),
-the final MCI protocol samples 16 distinct trials without replacement. We denote
+the final MCI and PD5 protocols sample 16 distinct trials without replacement.
+We denote
 this protocol **K16**, where K is simply the number of trials sampled from each
 task for one subject. The baseline K4 therefore uses four trials per task. The
 historical implementation split K16 into four disjoint groups of four trials
@@ -204,8 +205,9 @@ over the four tasks. Each subject contributes one supervised loss, so K16 reduce
 sampling variance without multiplying subject weight.
 Validation and test use all valid trials. This estimator is permutation invariant,
 contains no learned task weights, and has far fewer subject-specific parameters
-than concatenating every trial representation. Subjects with fewer than four
-valid trials in any task are excluded in the strict reference protocol.
+than concatenating every trial representation. Training subjects with fewer than
+16 valid trials in any task are excluded. Validation and test require at least
+four trials per task and average every available valid trial.
 
 The embedding and bottom four BERT layers are frozen; the top eight layers and
 head use learning rate `1e-5`. MCI uses subject-level positive weighting and a
@@ -250,7 +252,7 @@ are reported but never used to rank a candidate.
 | BERT mask | paired span, ratio 0.60, uniform length 1–5 | Prevents cross-eye copying, mixes micro- and mesoscale occlusion, and is the strongest completed validation-selected factorized run across MCI/PD5. |
 | BERT optimizer | 50K, 128/GPU, `3e-4→3e-5`, 2K warmup | Fifty thousand steps is the strongest completed validation reference; 80K lowers MLM CE but has not produced a consistent disease-validation gain. |
 | Adaptation | freeze embedding/bottom four; train top eight | Top six under-adapts; top ten gave only a marginal validation increase with worse stability; full unfreezing was unstable. |
-| Subject head | shared `400→128→C`, dropout 0.3, K16 for final MCI | Hidden 128 and dropout 0.3 led PD5 validation and balanced accuracy; K16 improved MCI over K4 without changing subject loss weight. |
+| Subject head | shared `400→128→C`, dropout 0.3, K16 for MCI and PD5 | Hidden 128 and dropout 0.3 led PD5 validation and balanced accuracy; using one common K16 estimator reduces sampling variance and keeps subject loss weight unchanged. |
 
 The physical pretraining batch is deliberately 128/GPU (global 512). Historical
 256/GPU runs processed approximately 2,660 rather than 1,840–2,100 trials/s,

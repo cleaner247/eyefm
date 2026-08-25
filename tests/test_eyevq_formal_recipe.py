@@ -36,15 +36,17 @@ def test_formal_attention_and_mask_are_explicit() -> None:
     }
 
 
-def test_formal_recipe_uses_only_validation_supported_task_bags() -> None:
+def test_formal_recipe_uses_unified_k16_task_bags() -> None:
     recipe = load("recipe.yaml")
     mci = load("mci.yaml")
     pd5 = load("pd5.yaml")
     assert recipe["selection_policy"] == "validation_only"
     assert recipe["downstream"]["test_used_for_selection"] is False
     assert mci["mil"]["trials_per_task"] == 16
+    assert mci["mil"]["eligibility_min_trials_per_task"] == 16
     assert mci["mil"]["evaluation_min_trials_per_task"] == 4
-    assert pd5["mil"]["trials_per_task"] == 4
+    assert pd5["mil"]["trials_per_task"] == 16
+    assert pd5["mil"]["eligibility_min_trials_per_task"] == 16
     assert pd5["mil"]["evaluation_min_trials_per_task"] == 4
 
 
