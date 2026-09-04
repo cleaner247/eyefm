@@ -61,6 +61,15 @@ def run_one_task(
     dl_epochs: int = 50,
     dl_archs: list[str] | None = None,
     dl_gpu: int = 0,
+    dl_use_swa: bool = False,
+    dl_swa_last_n: int = 5,
+    dl_use_focal: bool = False,
+    dl_focal_gamma: float = 2.0,
+    dl_use_logit_adjust: bool = False,
+    dl_seeds: list[int] | None = None,  # v8.3 P1.6: multi-seed ensemble
+    dl_d_task: int = 16,                 # v8.4 P2 detox ablation
+    dl_d_model: int = 64,
+    dl_dropout: float = 0.3,
 ) -> dict[str, list[dict]]:
     """Run both ML grid + DL 4-arch baselines for a single task; return dict of results."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -101,11 +110,17 @@ def run_one_task(
         dl_results = run_dl_task(
             task=task, data_root=data_root, out_dir=out_dir, archs=archs,
             t_len=dl_t_len, max_epochs=dl_epochs, device=device,
+            use_swa=dl_use_swa, swa_last_n=dl_swa_last_n,
+            use_focal=dl_use_focal, focal_gamma=dl_focal_gamma,
+            use_logit_adjust=dl_use_logit_adjust,
+            seeds=dl_seeds,
+            d_task=dl_d_task, d_model=dl_d_model, dropout=dl_dropout,
         )
         results["dl"] = dl_results
         for r in dl_results:
-            LOGGER.info("  DL %s  best_val=%.4f  test=%.4f", r["arch"], r["best_val_score"],
-                        r.get("auroc", r.get("auroc_macro", float("nan"))))
+            LOGGER.info("  DL %s  best_val=%.4f  test=%.4f  swa=%s  n_seeds=%d", r["arch"], r["best_val_score"],
+                        r.get("auroc", r.get("auroc_macro", float("nan"))),
+                        r.get("used_swa", False), r.get("n_seeds", 1))
     return results
 
 
@@ -143,7 +158,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--out-dir", required=True, type=Path,
                         help="Output directory for csv + summary.")
     parser.add_argument("--task", action="append", default=None,
-                        choices=["detox_binary", "pd_related_5class", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"],
+                        choices=["detox_binary", "pd_binary", "pd_related_5class", "pd_related_3class_scheme_b", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"],
                         help="Task to run. Repeatable. Default: both 2 task.")
     parser.add_argument("--all", action="store_true",
                         help="Run on all 2 tasks (detox_binary, pd_related_5class).")
@@ -155,6 +170,24 @@ def parse_args() -> argparse.Namespace:
                         choices=["TCN", "TimesNet", "NST", "CNNTransformer"],
                         help="Restrict DL archs. Repeatable.")
     parser.add_argument("--gpu", type=int, default=0, help="CUDA device index for DL (default 0)")
+    parser.add_argument("--dl-use-swa", action="store_true",
+                        help="v8.3 P1.1: enable SWA (stochastic weight averaging) over last N epoch weights")
+    parser.add_argument("--dl-swa-last-n", type=int, default=5,
+                        help="Number of trailing epochs to average into SWA (default 5)")
+    parser.add_argument("--dl-use-focal", action="store_true",
+                        help="v8.3 P1.3: use Focal Loss (γ=2) instead of cross-entropy")
+    parser.add_argument("--dl-focal-gamma", type=float, default=2.0,
+                        help="Focal Loss γ (focusing parameter, default 2.0)")
+    parser.add_argument("--dl-use-logit-adjust", action="store_true",
+                        help="v8.3 P1.2: add log(π_pos/(1-π_pos)) to class-1 logits during training")
+    parser.add_argument("--dl-seeds", type=str, default=None,
+                        help="v8.3 P1.6: comma-separated list of seeds for multi-seed ensemble (default '42')")
+    parser.add_argument("--dl-d-task", type=int, default=16,
+                        help="v8.4 P2 detox ablation: task embedding dim (0 = no task conditioning)")
+    parser.add_argument("--dl-d-model", type=int, default=64,
+                        help="v8.4 P2 detox ablation: tokenizer/head hidden dim (smaller = less capacity)")
+    parser.add_argument("--dl-dropout", type=float, default=0.3,
+                        help="v8.4 P2 detox ablation: model dropout (higher = more regularization)")
     parser.add_argument("--log-level", default="INFO")
     return parser.parse_args()
 
@@ -163,7 +196,7 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
     if args.all or not args.task:
-        tasks = ["detox_binary", "pd_related_5class", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"]
+        tasks = ["detox_binary", "pd_related_5class", "pd_related_3class_scheme_b", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"]
     else:
         tasks = list(args.task)
     LOGGER.info("Tasks: %s", tasks)
@@ -177,12 +210,21 @@ def main() -> None:
     else:
         LOGGER.warning("CUDA not available; DL will use CPU (slow).")
     all_results: dict[str, dict[str, list[dict]]] = {}
+    dl_seeds = [int(s) for s in args.dl_seeds.split(",")] if args.dl_seeds else None
+    if dl_seeds:
+        LOGGER.info("Multi-seed ensemble: %s", dl_seeds)
     for task in tasks:
         all_results[task] = run_one_task(
             task=task, data_root=args.data_root, out_dir=args.out_dir,
             skip_ml=args.skip_ml, skip_dl=args.skip_dl,
             dl_t_len=args.dl_t_len, dl_epochs=args.dl_epochs,
             dl_archs=args.dl_arch, dl_gpu=args.gpu,
+            dl_use_swa=args.dl_use_swa, dl_swa_last_n=args.dl_swa_last_n,
+            dl_use_focal=args.dl_use_focal, dl_focal_gamma=args.dl_focal_gamma,
+            dl_use_logit_adjust=args.dl_use_logit_adjust,
+            dl_seeds=dl_seeds,
+            dl_d_task=args.dl_d_task, dl_d_model=args.dl_d_model,
+            dl_dropout=args.dl_dropout,
         )
     write_combined_summary(args.out_dir, all_results)
     LOGGER.info("All done.")

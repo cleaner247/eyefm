@@ -32,6 +32,29 @@ N_X_COLS = 10
 COL_LEFT_QC, COL_RIGHT_QC = 0, 1
 N_Y_COLS = 2
 
+# ==== v8 layout: per-eye quality + saccade task id ====
+# Input column layout for v8 (12 dim, replaces v7's 10-dim flat concat):
+#   col 0  : L_x       (eye)
+#   col 1  : L_y       (eye)
+#   col 2  : L_area    (eye)
+#   col 3  : R_x       (eye)
+#   col 4  : R_y       (eye)
+#   col 5  : R_area    (eye)
+#   col 6  : S_x       (stim)
+#   col 7  : S_y       (stim)
+#   col 8  : S_on      (stim)
+#   col 9  : S_fix     (stim)
+#   col 10 : L_quality (from y_frame col 0; 0=normal, 1=blink, 2=missing)
+#   col 11 : R_quality (from y_frame col 1)
+
+# Saccade task id (per-trial categorical, used by 3-stream task conditioning).
+TASK_TO_IDX = {
+    "ProSaccade": 0,
+    "AntiSaccade": 1,
+    "MemorySaccade": 2,
+    "DoubleSaccade": 3,
+}
+
 
 @dataclass(frozen=True)
 class SplitData:
@@ -41,6 +64,7 @@ class SplitData:
     labels: list[int]                 # per-row integer label
     subj_ids: list[str]               # per-row ml_subject_id
     tasks: list[str]                  # per-row task name (ProSaccade / AntiSaccade / ...)
+    task_idx: list[int]               # per-row saccade task id (0..3, see TASK_TO_IDX)
     frame_offsets: list[int]
     frame_lengths: list[int]
     shard_ids: list[str]
@@ -63,6 +87,11 @@ def get_label_map(task: str) -> dict[str, int]:
     """String label → int map per task."""
     if task == "pd_related_5class":
         return {"-1": 0, "0": 1, "1": 2, "2": 3, "3": 4}
+    if task == "pd_related_3class_scheme_b":
+        # v6 3class scheme B: control/parkinson_spectrum/tremor_spectrum
+        # source pd_disease_label: -1 control, 0 PD, 1 tremor1, 2 tremor2, 3 MD
+        # → 0 control, 1 parkinson_spectrum (0+3), 2 tremor_spectrum (1+2)
+        return {"-1": 0, "0": 1, "1": 2, "2": 2, "3": 1}
     if task in ("detox_binary", "pd_binary", "ad_binary", "epilepsy_binary", "mci_binary", "migraine_binary"):
         return {"0": 0, "1": 1}
     raise ValueError(f"Unknown task: {task}")
@@ -71,6 +100,8 @@ def get_label_map(task: str) -> dict[str, int]:
 def get_n_classes(task: str) -> int:
     if task == "pd_related_5class":
         return 5
+    if task == "pd_related_3class_scheme_b":
+        return 3
     return 2
 
 
@@ -93,7 +124,7 @@ def build_split_data(
     # (-1 healthy, 0..3 disease grade); `detox_binary` / `pd_binary` use
     # `health_label` (0 healthy, 1 disease). Reading the wrong field would
     # silently collapse the label distribution to 2 classes.
-    label_field = "pd_disease_label" if task == "pd_related_5class" else "health_label"
+    label_field = "pd_disease_label" if task in ("pd_related_5class", "pd_related_3class_scheme_b") else "health_label"
     out: dict[str, SplitData] = {}
     for split in splits:
         rows = load_split(task, split, data_root)
@@ -103,6 +134,7 @@ def build_split_data(
             labels=[int(label_map.get(r.get(label_field, r.get("health_label", "0")), 0)) for r in rows],
             subj_ids=[r.get("ml_subject_id", "") for r in rows],
             tasks=[r.get("task", "") for r in rows],
+            task_idx=[TASK_TO_IDX.get(r.get("task", ""), 0) for r in rows],
             frame_offsets=[int(r["frame_offset"]) for r in rows],
             frame_lengths=[int(r["frame_length"]) for r in rows],
             shard_ids=[r["shard_id"] for r in rows],
@@ -160,22 +192,28 @@ class TrialDataset(Dataset):
         return len(self.split.rows)
 
     def _load_window(self, idx: int) -> np.ndarray:
+        """Return (T, 12) window: 10 base cols + per-eye quality from y_frame."""
         shard_id = self.split.shard_ids[idx]
         offset = self.split.frame_offsets[idx]
         length = self.split.frame_lengths[idx]
-        X_mmap, _ = self.shard_cache.get(shard_id)
+        X_mmap, Y_mmap = self.shard_cache.get(shard_id)
         n_avail = min(length, len(X_mmap) - offset)
+        n_cols = N_X_COLS + N_Y_COLS  # 12
         if n_avail <= 0:
-            return np.zeros((self.t_len, N_X_COLS), dtype=np.float32)
-        window = np.array(X_mmap[offset:offset + n_avail], dtype=np.float32, copy=True)
-        if window.shape[0] >= self.t_len:
-            return window[: self.t_len]
-        pad = np.zeros((self.t_len - window.shape[0], N_X_COLS), dtype=np.float32)
-        return np.concatenate([window, pad], axis=0)
+            return np.zeros((self.t_len, n_cols), dtype=np.float32)
+        window = np.array(X_mmap[offset:offset + n_avail], dtype=np.float32, copy=True)  # (T, 10)
+        y = np.array(Y_mmap[offset:offset + n_avail], dtype=np.float32, copy=True)        # (T, 2)
+        # Concat per-eye quality as col 10 (L) and col 11 (R)
+        quality = y[:, :N_Y_COLS]                                       # (T, 2)
+        window_ext = np.concatenate([window, quality], axis=-1)          # (T, 12)
+        if window_ext.shape[0] >= self.t_len:
+            return window_ext[: self.t_len]
+        pad = np.zeros((self.t_len - window_ext.shape[0], n_cols), dtype=np.float32)
+        return np.concatenate([window_ext, pad], axis=0)
 
-    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int]:
+    def __getitem__(self, idx: int) -> tuple[torch.Tensor, int, int]:
         x = self._load_window(idx)
-        return torch.from_numpy(x), self.split.labels[idx]
+        return torch.from_numpy(x), self.split.labels[idx], self.split.task_idx[idx]
 
 
 def make_subject_batches(
@@ -199,14 +237,15 @@ def make_subject_batches(
     return batches
 
 
-def collate_subjects(batch_idxs: list[int], dataset: TrialDataset) -> tuple[torch.Tensor, torch.Tensor]:
-    """Stack one subject's trials into (K, T, 10) + (K,) label tensor."""
-    xs, ys = [], []
+def collate_subjects(batch_idxs: list[int], dataset: TrialDataset) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """Stack one subject's trials into (K, T, 12) + (K,) label + (K,) task_idx tensor."""
+    xs, ys, tids = [], [], []
     for i in batch_idxs:
-        x, y = dataset[i]
-        xs.append(torch.from_numpy(x))
+        x, y, t = dataset[i]
+        xs.append(x)
         ys.append(int(y))
-    return torch.stack(xs, dim=0), torch.tensor(ys, dtype=torch.long)
+        tids.append(int(t))
+    return torch.stack(xs, dim=0), torch.tensor(ys, dtype=torch.long), torch.tensor(tids, dtype=torch.long)
 
 
 def class_weights_from_labels(labels: Sequence[int], n_classes: int) -> torch.Tensor:
