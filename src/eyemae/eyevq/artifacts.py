@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import pickle
+import re
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -21,6 +23,18 @@ from eyemae.utils import to_serializable, write_json
 
 ARTIFACT_IDENTITY_VERSION = 1
 CACHE_FORMAT_VERSION = 4
+
+
+def checkpoint_step(path: str | Path) -> int:
+    match = re.fullmatch(r"ckpt_step0*(\d+)\.pt", Path(path).name)
+    if not match:
+        raise ValueError(f"Not a step checkpoint: {path}")
+    return int(match.group(1))
+
+
+def latest_step_checkpoint(directory: str | Path) -> Path | None:
+    candidates = list(Path(directory).glob("ckpt_step*.pt"))
+    return max(candidates, key=checkpoint_step) if candidates else None
 
 
 def sha256_file(path: str | Path, chunk_size: int = 8 * 1024 * 1024) -> str:
@@ -79,7 +93,7 @@ def dataset_dependency_paths(cfg: Mapping[str, Any]) -> dict[str, Path]:
     manifest = data_path / "dataset_manifest.json"
     if manifest.is_file():
         dependencies["dataset_manifest"] = manifest
-    for key in ("train_index", "val_index"):
+    for key in ("train_index", "val_index", "test_index"):
         value = train_cfg.get(key, data_cfg.get(key))
         if value:
             dependencies[key] = data_path / str(value)
@@ -229,10 +243,15 @@ def validate_cache_identity(
 def checkpoint_has_identity(
     checkpoint_path: str | Path,
     expected: Mapping[str, Any],
+    *,
+    required_step: int | None = None,
 ) -> bool:
     try:
         checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
         assert_run_identity(checkpoint, expected)
+        if required_step is not None and int(checkpoint.get("step", -1)) != required_step:
+            return False
         return True
-    except (FileNotFoundError, KeyError, OSError, RuntimeError, ValueError):
+    except (KeyError, OSError, RuntimeError, ValueError, TypeError, AttributeError,
+            EOFError, pickle.UnpicklingError):
         return False

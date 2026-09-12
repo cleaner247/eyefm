@@ -34,6 +34,7 @@ def evaluate_checkpoint(
     *,
     output_dir: str | Path | None = None,
     device: torch.device | None = None,
+    include_train: bool = False,
 ) -> dict[str, Any]:
     checkpoint_path = Path(checkpoint_path)
     output_dir = Path(output_dir) if output_dir is not None else checkpoint_path.parent
@@ -60,6 +61,7 @@ def evaluate_checkpoint(
         bert,
         num_tasks=4,
         num_classes=num_classes,
+        output_dim=2 if label_type == "hierarchical_pd3" else None,
         classifier_hidden=int(model_cfg.get("classifier_hidden", 32)),
         task_bottleneck_dim=int(model_cfg.get("task_bottleneck_dim", 16)),
         residual_hidden=int(model_cfg.get("residual_hidden", 16)),
@@ -94,6 +96,7 @@ def evaluate_checkpoint(
             cfg["mil"].get("missing_task_embedding", "none")
         ),
     )
+    model.label_type = label_type
     model.load_state_dict(checkpoint["model_state_dict"], strict=True)
     model.to(device).eval()
 
@@ -167,14 +170,26 @@ def evaluate_checkpoint(
         "test": test_trials.rows,
     })
     assert_clean_splits(split_audit)
+    train_loader: DataLoader | None = (
+        _trial_loader(train_trials, train_cfg) if include_train else None
+    )
     val_loader: DataLoader = _trial_loader(val_trials, train_cfg)
     test_loader: DataLoader = _trial_loader(test_trials, train_cfg)
     bf16 = bool(train_cfg.get("bf16", True))
+    train_demographics = None
     val_demographics = None
     test_demographics = None
     if demographics_enabled:
+        train_subjects = {str(row["ml_subject_id"]) for row in train_trials.rows}
         val_subjects = {str(row["ml_subject_id"]) for row in val_trials.rows}
         test_subjects = {str(row["ml_subject_id"]) for row in test_trials.rows}
+        if include_train:
+            train_demographics = encode_subject_demographics(
+                read_demographic_index(
+                    data_dir / data_cfg["train_index"], subjects=train_subjects
+                ),
+                demographic_spec,
+            )
         val_demographics = encode_subject_demographics(
             read_demographic_index(
                 data_dir / data_cfg["val_index"], subjects=val_subjects
@@ -188,6 +203,21 @@ def evaluate_checkpoint(
             demographic_spec,
         )
 
+    train_metrics = None
+    train_rows = None
+    if include_train:
+        if train_loader is None:
+            raise RuntimeError("Train evaluation requested without a train loader")
+        train_metrics, train_rows = evaluate_subjects(
+            model,
+            train_loader,
+            device,
+            split_name="train",
+            bf16=bf16,
+            subject_demographics=train_demographics,
+            task_coverage_loss_weighting=task_coverage_loss_weighting,
+        )
+
     val_metrics, val_rows = evaluate_subjects(
         model,
         val_loader,
@@ -198,6 +228,9 @@ def evaluate_checkpoint(
         task_coverage_loss_weighting=task_coverage_loss_weighting,
     )
     if label_type == "binary":
+        threshold = 0.5
+        val_bacc = float(val_metrics["val/subject/balanced_accuracy"])
+    elif label_type == "hierarchical_pd3":
         threshold = 0.5
         val_bacc = float(val_metrics["val/subject/balanced_accuracy"])
     else:
@@ -213,16 +246,31 @@ def evaluate_checkpoint(
         subject_demographics=test_demographics,
         task_coverage_loss_weighting=task_coverage_loss_weighting,
     )
-    selection_metric = (
-        "auroc" if label_type == "binary" else "macro_auroc_ovr"
-    )
+    declared_selection_metric = checkpoint.get("selection_metric")
+    if declared_selection_metric is None:
+        declared_selection_metric = train_cfg.get("selection_metric")
+    if declared_selection_metric is None:
+        declared_selection_metric = train_cfg.get("early_stopping_metric")
+    if declared_selection_metric is None:
+        declared_selection_metric = (
+            "auroc" if label_type == "binary" else "macro_auroc_ovr"
+        )
+    selection_metric = str(declared_selection_metric).split("/")[-1]
+    selection_key = f"val/subject/{selection_metric}"
+    if selection_key not in val_metrics:
+        raise KeyError(
+            f"Checkpoint selection metric {selection_key!r} is absent from "
+            "validation metrics"
+        )
     result: dict[str, Any] = {
         "checkpoint": str(checkpoint_path),
         "best_step": int(checkpoint.get("step", -1)),
-        "best_val_auroc": float(
-            val_metrics[f"val/subject/{selection_metric}"]
-        ),
-        "checkpoint_selection_metric": f"val/subject/{selection_metric}",
+        # Keep best_val_auroc for compatibility with historical consumers;
+        # best_val_selection_score is the semantically correct field when a
+        # thresholded metric such as balanced accuracy selected the checkpoint.
+        "best_val_auroc": float(val_metrics[selection_key]),
+        "best_val_selection_score": float(val_metrics[selection_key]),
+        "checkpoint_selection_metric": selection_key,
         "label_type": label_type,
         "num_classes": num_classes,
         "val": val_metrics,
@@ -230,6 +278,8 @@ def evaluate_checkpoint(
         "split_audit": split_audit,
         "cfg": cfg,
     }
+    if train_metrics is not None:
+        result["train"] = train_metrics
     if label_type == "binary":
         result.update({
             "decision_rule": "fixed_threshold",
@@ -240,6 +290,15 @@ def evaluate_checkpoint(
             "test": test_metrics,
             "test_default_05": test_metrics,
         })
+    elif label_type == "hierarchical_pd3":
+        result.update({
+            "decision_rule": "disease_sigmoid_then_subtype_sigmoid",
+            "disease_threshold": 0.5,
+            "subtype_threshold": 0.5,
+            "subtype_positive_class": "tremor_spectrum",
+            "val_balanced_accuracy": float(val_bacc),
+            "test": test_metrics,
+        })
     else:
         result.update({
             "decision_rule": "argmax",
@@ -247,6 +306,8 @@ def evaluate_checkpoint(
             "test": test_metrics,
         })
     output_dir.mkdir(parents=True, exist_ok=True)
+    if train_rows is not None:
+        write_prediction_csv(output_dir / "predictions_train.csv", train_rows)
     write_prediction_csv(output_dir / "predictions_val_best.csv", val_rows)
     write_prediction_csv(output_dir / "predictions_test.csv", test_rows)
     write_json(output_dir / "metrics_test.json", result)
@@ -257,18 +318,35 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--output-dir")
+    parser.add_argument(
+        "--include-train",
+        action="store_true",
+        help="Evaluate the selected checkpoint on the full eligible training split too.",
+    )
     args = parser.parse_args()
-    result = evaluate_checkpoint(args.checkpoint, output_dir=args.output_dir)
+    result = evaluate_checkpoint(
+        args.checkpoint,
+        output_dir=args.output_dir,
+        include_train=args.include_train,
+    )
     test_metrics = (
         result["test"]
     )
-    metric_suffix = "auroc" if result["label_type"] == "binary" else "macro_auroc_ovr"
-    print({
-        "best_step": result["best_step"],
-        "val_auroc": result["best_val_auroc"],
-        "test_auroc": test_metrics[f"test/subject/{metric_suffix}"],
-        "test_bacc": test_metrics["test/subject/balanced_accuracy"],
-    })
+    if result["label_type"] == "binary":
+        print({
+            "best_step": result["best_step"],
+            "val_auroc": result["best_val_selection_score"],
+            "test_auroc": test_metrics["test/subject/auroc"],
+            "test_balanced_accuracy": test_metrics["test/subject/balanced_accuracy"],
+        })
+    else:
+        print({
+            "best_step": result["best_step"],
+            "val_selection_score": result["best_val_selection_score"],
+            "test_balanced_accuracy": test_metrics["test/subject/balanced_accuracy"],
+            "test_weighted_f1": test_metrics["test/subject/weighted_f1"],
+            "test_cohen_kappa": test_metrics["test/subject/cohen_kappa"],
+        })
 
 
 if __name__ == "__main__":

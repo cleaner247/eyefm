@@ -1,5 +1,5 @@
-recipe_version: 2
-status: v6_operational_default_downstream_validation_pending
+recipe_version: 3
+status: twelve_layer_reference
 selection_policy: validation_only_for_model_selection
 test_status: historically_observed_internal_exploration
 
@@ -7,8 +7,8 @@ dataset:
   version: eyemae_fast_dataset_v6
   root: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6
   shared_artifacts: outputs/eyevq/v6_shared
-  shared_artifact_manifest: outputs/eyevq/v6_shared/artifact_manifest.json
-  shared_artifact_manifest_sha256: 9ae7c94c864d3f41cb46a11a33f03e33a9658df3ba2e65ac73854fd3dcd2cbc5
+  shared_artifact_manifest: configs/eyevq/final/artifact_manifest.json
+  shared_artifact_manifest_sha256: a07847c542d525b5ca27869643fbc4e45423a16d59d40e507253c4faffb9a9ef
   manifest_sha256: a50d59ea13c885371349b4478ea1c7dacd6a89f1dd3005afd72c11856cc0cfe1
   build_audit: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/v6_build_audit.json
   build_audit_sha256: 8ab9ad8d6770c71c71752651cb1a7f263f19f99dddbc0d29123616382cee664d
@@ -23,11 +23,12 @@ architecture:
   stimulus_reads_cls: false
   fsq_levels: [9, 7, 5, 5]
   bert_target: factorized_fsq_cross_entropy
-  bert_mask: paired_valid_only_span_1_to_5_uniform_ratio_0.60
+  bert_mask: paired_dual_scale_short_15x1to3_long_5x4to6
   mci_aggregation: strict_four_task_k16_shared_logit_mean
-  pd5_aggregation: strict_four_task_k16_shared_logit_mean
+  pd3_aggregation: strict_four_task_k16_shared_logit_mean_scheme_b
 
 quality_gates:
+  mode: advisory
   tokenizer:
     # V6 scale, calibrated against the completed non-collapsed 40K run.
     max_val_eye_loss: 0.0017
@@ -42,4 +43,8 @@ quality_gates:
 
 downstream:
   seeds: [42, 43, 44]
+  tasks: [mci, pd3]
+  pd3_label_policy: control_vs_parkinson_plus_movement_disorder_vs_tremor_plus_et
+  pd3_class_weighting: equal_heads_subject_inverse_frequency_within_head
+  pd3_selection_metric: macro_auroc_ovr
   test_used_for_selection: false

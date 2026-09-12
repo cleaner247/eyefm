@@ -8,11 +8,11 @@ Padding: round Nmax up to nearest 64, cap at 384 (matches pretraining).
 Usage:
   # 4-GPU DDP
   CUDA_VISIBLE_DEVICES=0,1,2,3 torchrun --nproc_per_node=4 \
-      -m eyemae.eyevq.tokenizer.train --config configs/eyevq/tokenizer_joint.yaml
+      -m eyemae.eyevq.tokenizer.train --config configs/eyevq/final/tokenizer.yaml
 
   # Single GPU
   CUDA_VISIBLE_DEVICES=2 python -m eyemae.eyevq.tokenizer.train \
-      --config configs/eyevq/tokenizer_joint.yaml
+      --config configs/eyevq/final/tokenizer.yaml
 """
 
 from __future__ import annotations
@@ -290,11 +290,16 @@ def load_trial_batch(store, rows, indices, pretrain_cfg, area_stats):
 
 def collate_vq_trials(items: list[dict]) -> dict:
     """Collate raw-loaded trials for k-means (channels-first format)."""
+    if not items:
+        raise ValueError("Cannot collate an empty VQ trial batch")
     batch_size = len(items)
     nmax = max(item["content"].shape[0] for item in items)
-    content = torch.zeros(batch_size, nmax, 2, 4, 20)
-    quality = torch.ones(batch_size, nmax, 2, 20, 1)
-    stim = torch.zeros(batch_size, nmax, 4, 20)
+    patch_samples = int(items[0]["content"].shape[-1])
+    if patch_samples < 1:
+        raise ValueError("K-means trials must contain at least one sample per patch")
+    content = torch.zeros(batch_size, nmax, 2, 4, patch_samples)
+    quality = torch.ones(batch_size, nmax, 2, patch_samples, 1)
+    stim = torch.zeros(batch_size, nmax, 4, patch_samples)
     eye_nonmissing = torch.zeros(batch_size, nmax, 2)
     pad_mask = torch.ones(batch_size, nmax, dtype=torch.bool)
     for i, item in enumerate(items):
@@ -377,8 +382,10 @@ def kmeans_init_codebook(
             batch = {k: v.to(device, non_blocking=True) if isinstance(v, torch.Tensor) else v
                      for k, v in batch.items()}
 
-            content = batch["content"].transpose(-1, -2).contiguous()
-            stim = batch["stim"].transpose(-1, -2).contiguous()
+            # load_trial_batch and collate_vq_trials already produce the
+            # channels-first representation expected by PatchEmbedding.
+            content = batch["content"]
+            stim = batch["stim"]
             eye_l = content[:, :, 0, :, :]
             eye_r = content[:, :, 1, :, :]
 
@@ -389,9 +396,18 @@ def kmeans_init_codebook(
             lr_hidden = torch.stack(
                 [enc["l_hidden"], enc["r_hidden"]], dim=2
             ).reshape(enc["l_hidden"].shape[0], -1, model.d_model)
-            z_e = model.vq_proj(lr_hidden)
-            z_e_eye_list.append(z_e.reshape(-1, D_eye).cpu().numpy())
+            z_e = model.vq_proj(lr_hidden).reshape(
+                enc["l_hidden"].shape[0], -1, 2, D_eye
+            )
+            valid_eye = (
+                batch["eye_nonmissing_frac"]
+                >= float(vq_cfg.get("min_nonmissing_frac", 0.50))
+            ) & (~batch["pad_mask"].unsqueeze(-1))
+            if valid_eye.any():
+                z_e_eye_list.append(z_e[valid_eye].cpu().numpy())
 
+    if not z_e_eye_list:
+        raise RuntimeError("K-means initialization collected no valid eye patches")
     z_e_eye_all = np.concatenate(z_e_eye_list, axis=0)
 
     logger.info(f"Collected z_e_eye (for VQ): {z_e_eye_all.shape[0]:,} vectors")
@@ -671,7 +687,20 @@ def train_vq(
         kaiming_init_weights(model, logger if is_rank0() else None)
 
     if world_size > 1:
-        model = DistributedDataParallel(model, device_ids=[device.index] if device.type == "cuda" else None)
+        # During the explicit VQ-VAE AE warmup the learned codebook is
+        # intentionally bypassed (quantize=False), so its embedding has no
+        # gradient until the Stage-A -> Stage-B transition.  DDP must be told
+        # about that deliberate dynamic graph; FSQ/AE and VQ-VAE without a
+        # warmup retain the faster all-parameters-used path.
+        vqvae_warmup = (
+            str(cfg.get("vq", {}).get("type", "fsq")) == "vqvae"
+            and int(train_cfg.get("stage_a_steps", 0)) > 0
+        )
+        model = DistributedDataParallel(
+            model,
+            device_ids=[device.index] if device.type == "cuda" else None,
+            find_unused_parameters=vqvae_warmup,
+        )
 
     raw_model = model.module if isinstance(model, DistributedDataParallel) else model
 
@@ -990,10 +1019,14 @@ def train_vq(
         sums.update({f"val/{key}": 0.0 for key in metric_keys})
         n_batches = 0
         n_trials = 0
-        code_counts = torch.zeros(
-            raw_model.eye_codebook.codebook_size,
-            dtype=torch.long,
-            device=device,
+        is_discrete = raw_model.vq_type != "ae"
+        code_counts = (
+            torch.zeros(
+                raw_model.eye_codebook.codebook_size,
+                dtype=torch.long,
+                device=device,
+            )
+            if is_discrete else None
         )
         max_val_batches_cfg = train_cfg.get("max_val_batches")
         max_val_batches = (
@@ -1050,7 +1083,7 @@ def train_vq(
                     )
             valid_eye = (v_nm >= float(vq_cfg.get("min_nonmissing_frac", 0.50))) & (~v_pad.unsqueeze(-1))
             valid_codes = v_out["code_ids"][valid_eye]
-            if valid_codes.numel():
+            if code_counts is not None and valid_codes.numel():
                 code_counts += torch.bincount(
                     valid_codes.long(), minlength=code_counts.numel()
                 )
@@ -1070,13 +1103,14 @@ def train_vq(
                 sums[key] = float(reduced[index].item())
             n_batches = int(reduced[-2].item())
             n_trials = int(reduced[-1].item())
-            dist.all_reduce(code_counts, op=dist.ReduceOp.SUM)
+            if code_counts is not None:
+                dist.all_reduce(code_counts, op=dist.ReduceOp.SUM)
         raw_model.train()
         result = {key: value / max(n_trials, 1) for key, value in sums.items()}
         result["val/batches"] = float(n_batches)
         result["val/trials"] = float(n_trials)
         result["val/velocity_weight_effective"] = float(velocity_weight)
-        if code_counts.sum().item() > 0:
+        if code_counts is not None and code_counts.sum().item() > 0:
             counts = code_counts.float()
             if hasattr(raw_model.eye_codebook, "usage_stats_from_counts"):
                 usage = raw_model.eye_codebook.usage_stats_from_counts(counts)
@@ -1125,7 +1159,7 @@ def train_vq(
 
             # K-means init at Stage A → B transition (VQ only, FSQ no-op)
             if quantize and not kmeans_done:
-                if cfg.get("vq", {}).get("type") != "fsq":
+                if cfg.get("vq", {}).get("type") == "vqvae":
                     if is_rank0():
                         kmeans_init_codebook(
                             raw_model, store, rows, pretrain_cfg, area_stats,
@@ -1215,7 +1249,7 @@ def train_vq(
                     # diagnostics include padded slots and are misleading for
                     # short trials.
                     valid_codes = out["code_ids"][eye_valid & (~pad_mask.unsqueeze(-1))]
-                    if valid_codes.numel():
+                    if raw_model.vq_type != "ae" and valid_codes.numel():
                         counts = torch.bincount(
                             valid_codes.long(), minlength=raw_model.eye_codebook.codebook_size
                         ).float()
@@ -1231,7 +1265,11 @@ def train_vq(
                             }
                         for key, value in valid_stats.items():
                             acc_vq_stats[key] = acc_vq_stats.get(key, 0.0) + value
-                    acc_vq_stats["commitment_loss"] = acc_vq_stats.get("commitment_loss", 0.0) + out["commit_eye"].item()
+                    if raw_model.vq_type != "ae":
+                        acc_vq_stats["commitment_loss"] = (
+                            acc_vq_stats.get("commitment_loss", 0.0)
+                            + out["commit_eye"].item()
+                        )
 
             # ── NaN / Inf detection ──
             loss_val = loss.item()
@@ -1302,7 +1340,10 @@ def train_vq(
 
             # Log (rank 0 only)
             if is_rank0() and global_step % log_every == 0:
-                stage = "A" if global_step < stage_a_steps else "B"
+                stage = (
+                    "AE" if raw_model.vq_type == "ae"
+                    else "A" if global_step < stage_a_steps else "B"
+                )
 
                 # ── Timing & throughput ──
                 elapsed = time.time() - last_log_time
@@ -1326,7 +1367,8 @@ def train_vq(
                 n_avg = max(steps_since_log, 1)
                 parts = [
                     f"step={global_step:06d}/{max_steps}", f"stage={stage}",
-                    f"loss={loss_val:.5f}", f"lr={lr:.2e}", f"cb={cb_now:.4f}",
+                    f"loss={loss_val:.5f}", f"lr={lr:.2e}",
+                    f"commit_w={float(step_loss_cfg['loss'].get('eye_commit_group_weight', 0.0)):.4f}",
                     f"vel_w={velocity_weight_now:.4f}",
                 ]
                 # Only output summary losses, skip per-feature detail

@@ -6,11 +6,18 @@ model:
   classifier_head: mlp
   dropout: 0.3
 mil:
-  task_ids: [0, 1, 2, 3]
-  task_names: [ProSaccade, AntiSaccade, MemorySaccade, DoubleSaccade]
+  task_ids:
+  - 0
+  - 1
+  - 2
+  - 3
+  task_names:
+  - ProSaccade
+  - AntiSaccade
+  - MemorySaccade
+  - DoubleSaccade
   subjects_per_gpu: 4
   class_sampling: epoch_shuffle_no_class_quota
-  # K16 is validation-selected for MCI and reduces seed/trial-sampling variance.
   trials_per_task: 16
   eligibility_min_trials_per_task: 16
   evaluation_min_trials_per_task: 4
@@ -24,14 +31,16 @@ train:
   seed: 42
   class_weighting: subject_pos_weight
   epochs: 10
-  encoder_lr: 5.0e-5
-  head_lr: 5.0e-5
-  encoder_min_lr: 5.0e-6
-  head_min_lr: 5.0e-6
+  encoder_lr: 5.0e-05
+  head_lr: 5.0e-05
+  encoder_min_lr: 5.0e-06
+  head_min_lr: 5.0e-06
   layer_decay: 1.0
   warmup_epochs: 1
   weight_decay: 0.05
-  betas: [0.9, 0.95]
+  betas:
+  - 0.9
+  - 0.95
   grad_clip: 1.0
   bf16: true
   num_workers: 4
@@ -40,16 +49,17 @@ train:
   early_stopping_metric: val/subject/auroc
   early_stopping_min_epochs: 10
   early_stopping_patience_epochs: 11
-  periodic_test_every_epochs: 0
   num_trial_views: 1
   trial_view_consistency_weight: 0.0
   auxiliary_task_loss_weight: 0.0
   feature_mixup_alpha: 0.0
+  periodic_test_every_epochs: 0
+  trial_view_aggregation: independent_loss
 data:
   pretraining_overlap_policy: allow_unlabeled_target_trials
   area_stats_mode: per_subject_transductive
   require_any_eye_keep: true
-  data_dir: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/finetune/mci_binary
+  data_dir: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/finetune/migraine_binary
   train_index: train.csv
   val_index: validation.csv
   test_index: test.csv
@@ -59,7 +69,10 @@ demographics:
   fusion: concat_task_cls
   projection_dim: 0
   age_encoding: zscore
-  features: [age, education, sex]
+  features:
+  - age
+  - education
+  - sex
 label:
   type: binary
   num_classes: 2

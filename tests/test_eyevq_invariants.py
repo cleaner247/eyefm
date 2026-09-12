@@ -17,6 +17,7 @@ import yaml
 
 from eyemae.batching import TokenBatchSampler
 from eyemae.eyevq.config import (
+    build_bert,
     checkpoint_config,
     build_tokenizer,
     override_fsq_levels,
@@ -26,6 +27,7 @@ from eyemae.eyevq.config import (
 from eyemae.eyevq.pretrain.masking import (
     generate_eyemae_mask,
     generate_eyemae_mask_paired_multiblock,
+    generate_eyemae_mask_paired_fixed_blocks,
     generate_eyemae_mask_paired_random,
     generate_eyemae_mask_paired_span,
     span_length_probabilities,
@@ -37,12 +39,7 @@ from eyemae.eyevq.pretrain.model import (
 )
 from eyemae.eyevq.pretrain.train import lookup_code_ids
 from eyemae.eyevq.optim import build_adamw_param_groups
-from eyemae.eyevq.search import (
-    cache_manifest_matches,
-    latest_step_checkpoint,
-    select_joint_candidate,
-    select_task_configuration,
-)
+from eyemae.eyevq.artifacts import latest_step_checkpoint
 from eyemae.eyevq.precompute_codes import mask_invalid_eye_codes
 from eyemae.eyevq.pipeline import Pipeline as EyeVQPipeline
 from eyemae.eyevq.artifacts import (
@@ -52,7 +49,7 @@ from eyemae.eyevq.artifacts import (
     validate_cache_identity,
     write_cache_manifest,
 )
-from eyemae.eyevq.downstream.train import get_encoder_head_lrs
+from eyemae.eyevq.downstream.runtime import get_encoder_head_lrs
 from eyemae.eyevq.downstream.model import EyeVQForClassification
 from eyemae.eyevq.tokenizer.model import (
     EyeVQTokenizer,
@@ -563,6 +560,44 @@ def test_paired_multiblock_is_nonoverlapping_gapped_and_valid_only() -> None:
     torch.testing.assert_close(mask, repeated)
 
 
+def test_paired_fixed_blocks_respect_count_span_gap_and_validity() -> None:
+    eye_valid = torch.ones(3, 64, 2, dtype=torch.bool)
+    pad = torch.zeros(3, 64, dtype=torch.bool)
+    mask, loss_mask = generate_eyemae_mask_paired_fixed_blocks(
+        eye_valid, pad, num_blocks=10, span_min=1, span_max=3, min_gap=1,
+        generator=torch.Generator().manual_seed(11),
+    )
+    selected = mask[:, 2::3]
+    torch.testing.assert_close(mask, loss_mask)
+    torch.testing.assert_close(selected, mask[:, 3::3])
+    for row in selected.tolist():
+        components, lengths, current = 0, [], 0
+        for value in row + [False]:
+            if value:
+                current += 1
+            elif current:
+                components += 1
+                lengths.append(current)
+                current = 0
+        assert components == 10
+        assert all(1 <= length <= 3 for length in lengths)
+
+    long_mask, _ = generate_eyemae_mask_paired_fixed_blocks(
+        eye_valid, pad, num_blocks=4, span_min=4, span_max=6, min_gap=1,
+        generator=torch.Generator().manual_seed(12),
+    )
+    for row in long_mask[:, 2::3].tolist():
+        lengths, current = [], 0
+        for value in row + [False]:
+            if value:
+                current += 1
+            elif current:
+                lengths.append(current)
+                current = 0
+        assert len(lengths) == 4
+        assert all(4 <= length <= 6 for length in lengths)
+
+
 def test_generic_mask_dispatches_both_paired_modes() -> None:
     eye_valid = torch.ones(1, 20, 2, dtype=torch.bool)
     pad = torch.zeros(1, 20, dtype=torch.bool)
@@ -646,104 +681,18 @@ def test_downstream_encoder_and_head_lr_schedules_are_independent() -> None:
     assert head_end == pytest.approx(2e-6)
 
 
-def test_nonuniform_bert_mask_config_is_rejected() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (root / "configs/eyevq/pretrain_joint.yaml").open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    cfg["mask"]["mode"] = "loss_weight"
-    with pytest.raises(ValueError, match="mask.mode must be one of"):
-        validate_bert_config(cfg)
 
 
-def test_paired_bert_mask_configs_and_span_bounds_are_validated() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (root / "configs/eyevq/pretrain_joint.yaml").open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    for mode in ("uniform", "paired_random", "paired_span"):
-        candidate = dict(cfg)
-        candidate["mask"] = dict(cfg["mask"], mode=mode)
-        validate_bert_config(candidate)
-    cfg["mask"].update({
-        "mode": "paired_span",
-        "span_min_patches": 7,
-        "span_max_patches": 6,
-    })
-    with pytest.raises(ValueError, match="span bounds"):
-        validate_bert_config(cfg)
 
 
-def test_canonical_eyevq_uses_fsq9755() -> None:
-    root = Path(__file__).resolve().parents[1]
-    for relative_path in (
-        "configs/eyevq/tokenizer_joint.yaml",
-        "configs/eyevq/tokenizer_cross_attention.yaml",
-        "configs/eyevq/pretrain_joint.yaml",
-        "configs/eyevq/pretrain_factorized.yaml",
-    ):
-        with (root / relative_path).open(encoding="utf-8") as handle:
-            cfg = yaml.safe_load(handle)
-        assert cfg["vq"]["fsq_d"] == 4
-        assert cfg["vq"]["fsq_L"] == [9, 7, 5, 5]
-        assert 9 * 7 * 5 * 5 == 1575
 
 
-def test_fsq97755_override_updates_dimension_and_codebook() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (root / "configs/eyevq/tokenizer_joint_per_subject.yaml").open(
-        encoding="utf-8"
-    ) as handle:
-        cfg = yaml.safe_load(handle)
-    override_fsq_levels(cfg, "9,7,7,5,5")
-    model = build_tokenizer(cfg)
-    assert cfg["vq"]["fsq_d"] == 5
-    assert cfg["vq"]["fsq_L"] == [9, 7, 7, 5, 5]
-    assert model.eye_codebook.codebook_size == 9 * 7 * 7 * 5 * 5 == 11025
 
 
-def test_v4_fsq97755_pipeline_configs_are_data_and_vocab_aligned() -> None:
-    root = Path(__file__).resolve().parents[1]
-    tokenizer = yaml.safe_load(
-        (root / "configs/eyevq/tokenizer_joint_per_subject_v4_fsq97755.yaml").read_text()
-    )
-    bert = yaml.safe_load(
-        (root / "configs/eyevq/pretrain_joint_per_subject_v4_fsq97755.yaml").read_text()
-    )
-    assert tokenizer["vq"]["fsq_d"] == 5
-    assert tokenizer["vq"]["fsq_L"] == [9, 7, 7, 5, 5]
-    assert bert["vq"]["fsq_d"] == tokenizer["vq"]["fsq_d"]
-    assert bert["vq"]["fsq_L"] == tokenizer["vq"]["fsq_L"]
-    assert tokenizer["train"]["data_path"] == bert["train"]["data_path"]
-    assert "eyemae_fast_dataset_v4" in tokenizer["train"]["data_path"]
-    assert tokenizer["train"]["area_stats_path"] == bert["train"]["area_stats_path"]
 
 
-def test_v4_fsq9755_stable_config_has_anti_collapse_settings() -> None:
-    root = Path(__file__).resolve().parents[1]
-    tokenizer = yaml.safe_load(
-        (root / "configs/eyevq/tokenizer_joint_per_subject_v4_fsq9755_stable.yaml").read_text()
-    )
-    bert = yaml.safe_load(
-        (root / "configs/eyevq/pretrain_joint_per_subject_v4_fsq9755.yaml").read_text()
-    )
-    assert tokenizer["vq"]["fsq_d"] == 4
-    assert tokenizer["vq"]["fsq_L"] == [9, 7, 5, 5]
-    assert tokenizer["vq"]["fsq_activation"] == "ifsq"
-    assert tokenizer["vq"]["ifsq_alpha"] == pytest.approx(1.6)
-    assert bert["vq"]["fsq_d"] == 4
-    assert bert["vq"]["fsq_L"] == [9, 7, 5, 5]
-    assert bert["vq"]["fsq_activation"] == "ifsq"
-    assert tokenizer["train"]["max_trials_per_gpu"] == 128
-    assert tokenizer["train"]["lr"] == pytest.approx(3.0e-4)
-    assert tokenizer["train"]["min_lr"] == pytest.approx(2.0e-5)
-    assert tokenizer["train"]["warmup_steps"] == 2000
-    assert tokenizer["train"]["lr_decay_start_step"] == 2000
-    assert tokenizer["train"]["stage_a_steps"] == 0
-    assert tokenizer["train"]["stage_b_steps"] == 50000
-    assert tokenizer["train"]["stage_a_steps"] + tokenizer["train"]["stage_b_steps"] == 50000
-    assert tokenizer["loss"]["eye_velocity_weight"] == pytest.approx(0.0)
-    assert tokenizer["loss"]["eye_velocity_start_step"] == 0
-    assert tokenizer["loss"]["eye_velocity_ramp_steps"] == 0
-    assert tokenizer["loss"]["manual_feature_group_weight"] == pytest.approx(0.005)
+
+
 
 
 def test_manual_continuous_uses_smooth_l1_and_count_has_zero_gradient() -> None:
@@ -835,23 +784,6 @@ def test_normalized_blink_pos_weight_does_not_inflate_bce_scale() -> None:
     assert stats["blink_positive_fraction"].item() == pytest.approx(0.25)
 
 
-def test_tokenizer_loss_configuration_matches_rebalanced_policy() -> None:
-    root = Path(__file__).resolve().parents[1]
-    for relative_path in (
-        "configs/eyevq/tokenizer_joint.yaml",
-        "configs/eyevq/tokenizer_cross_attention.yaml",
-        "configs/eyevq/tokenizer_joint_per_subject.yaml",
-        "configs/eyevq/tokenizer_joint_per_subject_v4_fsq97755.yaml",
-    ):
-        with (root / relative_path).open(encoding="utf-8") as handle:
-            loss_cfg = yaml.safe_load(handle)["loss"]
-        assert loss_cfg["eye_xy_weight"] == pytest.approx(1.0)
-        assert loss_cfg["eye_area_weight"] == pytest.approx(0.2)
-        assert loss_cfg["eye_blink_weight"] == pytest.approx(0.1)
-        assert loss_cfg["eye_blink_pos_weight"] == pytest.approx(1.0)
-        assert loss_cfg["eye_velocity_weight"] == pytest.approx(5.0)
-        assert loss_cfg["manual_feature_balanced_bce"] is False
-        assert loss_cfg["manual_feature_group_weight"] == pytest.approx(0.005)
 
 
 def test_cache_lookup_never_substitutes_missing_labels() -> None:
@@ -861,12 +793,6 @@ def test_cache_lookup_never_substitutes_missing_labels() -> None:
         lookup_code_ids(batch, {"present": 0}, codes, torch.device("cpu"), 4)
 
 
-def test_50k_pipeline_shell_is_valid() -> None:
-    root = Path(__file__).resolve().parents[1]
-    subprocess.run(
-        ["bash", "-n", str(root / "scripts/run_eyevq_50k_pipeline.sh")],
-        check=True,
-    )
 
 
 class _SizedDataset:
@@ -929,7 +855,7 @@ def test_installed_package_imports_outside_repository() -> None:
     [
         ("src/eyemae/eyevq/tokenizer/train.py", "model"),
         ("src/eyemae/eyevq/pretrain/train.py", "model"),
-        ("src/eyemae/eyevq/downstream/train.py", "model"),
+        ("src/eyemae/eyevq/downstream/train_mil.py", "model"),
     ],
 )
 def test_training_forward_does_not_bypass_ddp(relative_path: str, forward_target: str) -> None:
@@ -980,72 +906,10 @@ def test_latest_step_checkpoint_uses_numeric_step(tmp_path: Path) -> None:
     assert latest_step_checkpoint(tmp_path).name == "ckpt_step040000.pt"
 
 
-def test_joint_selection_never_uses_test_metrics() -> None:
-    selected, _ = select_joint_candidate([
-        {
-            "name": "balanced",
-            "step": 50_000,
-            "mci_val_auroc": 0.90,
-            "pd5_val_macro_auroc": 0.88,
-            "test_auroc": 0.1,
-        },
-        {
-            "name": "bad_val_great_test",
-            "step": 40_000,
-            "mci_val_auroc": 0.80,
-            "pd5_val_macro_auroc": 0.78,
-            "test_auroc": 1.0,
-        },
-    ])
-    assert selected["name"] == "balanced"
 
 
-def test_task_selection_near_tie_prefers_stable_simple_configuration() -> None:
-    selected = select_task_configuration([
-        {
-            "name": "ten_layers",
-            "mean_val_auroc": 0.901,
-            "std_val_auroc": 0.02,
-            "unfrozen_layers": 10,
-            "encoder_lr": 1e-5,
-        },
-        {
-            "name": "six_layers",
-            "mean_val_auroc": 0.900,
-            "std_val_auroc": 0.005,
-            "unfrozen_layers": 6,
-            "encoder_lr": 5e-6,
-        },
-    ])
-    assert selected["name"] == "six_layers"
 
 
-def test_code_cache_manifest_rejects_tokenizer_or_config_change(tmp_path: Path) -> None:
-    tokenizer = tmp_path / "tokenizer.pt"
-    tokenizer.write_bytes(b"tokenizer-a")
-    config = tmp_path / "bert.yaml"
-    config.write_text("mask: 0.15\n", encoding="utf-8")
-    cache = tmp_path / "codes.npz"
-    np.savez_compressed(
-        cache,
-        format_version=np.int64(3),
-        tokenizer_checkpoint=np.array(str(tokenizer.resolve())),
-        gids=np.array(["trial"], dtype=object),
-        code_ids=np.zeros((1, 1, 2), dtype=np.int16),
-        num_patches=np.ones(1, dtype=np.int16),
-    )
-    from eyemae.eyevq.search import sha256_file
-
-    manifest = tmp_path / "manifest.json"
-    manifest.write_text(json.dumps({
-        "tokenizer_checkpoint": str(tokenizer.resolve()),
-        "tokenizer_sha256": sha256_file(tokenizer),
-        "bert_config_sha256": sha256_file(config),
-        "cache_size_bytes": cache.stat().st_size,
-    }), encoding="utf-8")
-    assert cache_manifest_matches(cache, manifest, tokenizer, config)
-    config.write_text("mask: 0.25\n", encoding="utf-8")
-    assert not cache_manifest_matches(cache, manifest, tokenizer, config)
 
 
 def test_content_addressed_cache_rejects_same_path_tokenizer_replacement(
@@ -1099,27 +963,3 @@ def test_strict_resume_identity_rejects_configuration_change() -> None:
     with pytest.raises(ValueError, match="Unsafe checkpoint resume rejected"):
         assert_run_identity(checkpoint, expected)
     assert_run_identity(checkpoint, expected, allow_mismatch=True)
-
-
-def test_three_seed_binary_ensemble_averages_logits(tmp_path: Path) -> None:
-    pipeline = object.__new__(EyeVQPipeline)
-    pipeline.output_root = tmp_path
-    for seed, offset in ((42, -0.3), (43, 0.0), (44, 0.3)):
-        directory = tmp_path / "downstream/mci" / f"seed{seed}"
-        directory.mkdir(parents=True)
-        for filename in ("predictions_val_best.csv", "predictions_test.csv"):
-            with (directory / filename).open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=["subject_key", "label", "logit"])
-                writer.writeheader()
-                writer.writerows([
-                    {"subject_key": "negative", "label": 0, "logit": -1.0 + offset},
-                    {"subject_key": "positive", "label": 1, "logit": 1.0 + offset},
-                ])
-    result = pipeline._ensemble_task("mci")
-    assert result["test"]["test/subject/auroc"] == pytest.approx(1.0)
-    with (tmp_path / "downstream/mci/ensemble/predictions_test.csv").open(
-        newline="", encoding="utf-8"
-    ) as handle:
-        rows = {row["subject_key"]: row for row in csv.DictReader(handle)}
-    assert float(rows["negative"]["logit"]) == pytest.approx(-1.0)
-    assert float(rows["positive"]["logit"]) == pytest.approx(1.0)

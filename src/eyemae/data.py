@@ -345,6 +345,9 @@ def _minimal_packed_row(row: dict[str, str]) -> dict[str, str]:
         "right_final_keep",
         "health_label",
         "pd_disease_label",
+        # Generic downstream tasks (for example depression) can carry an
+        # explicit class id without overloading the PD-specific label fields.
+        "class_label",
     ]
     return {key: row.get(key, "") for key in keep}
 

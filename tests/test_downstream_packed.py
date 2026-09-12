@@ -67,6 +67,7 @@ def _write_packed_fixture(root: Path, rows: list[dict[str, str]]) -> Path:
         "right_final_keep",
         "health_label",
         "pd_disease_label",
+        "class_label",
     ]
     with index.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -76,7 +77,7 @@ def _write_packed_fixture(root: Path, rows: list[dict[str, str]]) -> Path:
 
 
 def _cfg(tmp_path: Path, label_cfg: dict) -> dict:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     cfg["data"]["format"] = "packed_mmap"
     cfg["data"]["data_dir"] = str(tmp_path)
     cfg["data"]["max_open_shards_per_worker"] = 2
@@ -150,3 +151,60 @@ def test_packed_downstream_pd_multiclass_labels(tmp_path: Path) -> None:
     assert dataset[1]["label"] == 3
     batch = collate_downstream_trials([dataset[0], dataset[1]])
     assert str(batch["label"].dtype) == "torch.int64"
+
+
+def test_packed_downstream_pd3_scheme_b_remap(tmp_path: Path) -> None:
+    rows = [
+        {
+            "global_trial_id": f"g{source_class}",
+            "ml_subject_id": f"s{source_class}",
+            "subject": f"s{source_class}",
+            "trial_id": f"t{source_class}",
+            "health_label": "0" if source_class == 0 else "1",
+            "pd_disease_label": "-1" if source_class == 0 else str(source_class - 1),
+        }
+        for source_class in range(5)
+    ]
+    index = _write_packed_fixture(tmp_path, rows)
+    cfg = _cfg(
+        tmp_path,
+        {
+            "type": "multiclass",
+            "task_name": "pd_related_3class_scheme_b",
+            "num_classes": 3,
+            "class_names": ["control", "parkinson_spectrum", "tremor_spectrum"],
+            "remap": {"0": 0, "1": 1, "2": 2, "3": 2, "4": 1},
+        },
+    )
+    dataset = PackedDownstreamDataset(tmp_path, index, cfg)
+    assert dataset.labels == [0, 1, 2, 2, 1]
+
+
+def test_packed_downstream_direct_multiclass_label(tmp_path: Path) -> None:
+    index = _write_packed_fixture(
+        tmp_path,
+        [
+            {
+                "global_trial_id": f"g{class_id}",
+                "ml_subject_id": f"s{class_id}",
+                "subject": f"s{class_id}",
+                "trial_id": f"t{class_id}",
+                "health_label": "",
+                "pd_disease_label": "",
+                "class_label": str(class_id),
+            }
+            for class_id in range(3)
+        ],
+    )
+    cfg = _cfg(
+        tmp_path,
+        {
+            "type": "multiclass",
+            "task_name": "depression",
+            "source_column": "class_label",
+            "num_classes": 3,
+            "class_names": ["healthy", "high_risk", "mdd"],
+        },
+    )
+    dataset = PackedDownstreamDataset(tmp_path, index, cfg)
+    assert dataset.labels == [0, 1, 2]

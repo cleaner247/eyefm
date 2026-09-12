@@ -10,7 +10,10 @@ import torch
 PAIRED_RANDOM = "paired_random"
 PAIRED_SPAN = "paired_span"
 PAIRED_MULTIBLOCK = "paired_multiblock"
-SUPPORTED_MASK_MODES = frozenset({PAIRED_RANDOM, PAIRED_SPAN, PAIRED_MULTIBLOCK})
+PAIRED_DUAL_SCALE = "paired_dual_scale"
+SUPPORTED_MASK_MODES = frozenset(
+    {PAIRED_RANDOM, PAIRED_SPAN, PAIRED_MULTIBLOCK, PAIRED_DUAL_SCALE}
+)
 UNIFORM_SPAN_LENGTHS = "uniform"
 SYMMETRIC_POWER_SPAN_LENGTHS = "symmetric_power"
 EXPLICIT_SPAN_LENGTHS = "explicit"
@@ -422,6 +425,71 @@ def generate_eyemae_mask_paired_multiblock(
         )
         selected |= additions
 
+    selected &= joint_valid
+    return _pack_paired_time_mask(selected, with_cls=with_cls)
+
+
+def generate_eyemae_mask_paired_fixed_blocks(
+    eye_valid: torch.Tensor,
+    pad_mask: torch.Tensor,
+    *,
+    num_blocks: int,
+    span_min: int,
+    span_max: int,
+    min_gap: int = 1,
+    generator: torch.Generator | None = None,
+    with_cls: bool = True,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mask a requested number of disjoint, uniformly sized temporal blocks.
+
+    Every placed block has an independently sampled integer length in
+    ``[span_min, span_max]``. Blocks never overlap and ``min_gap=1`` keeps
+    adjacent blocks from silently merging. Fragmented/short trials place the
+    maximum feasible number of valid blocks without ever masking an invalid
+    eye or violating the requested length range.
+    """
+    num_blocks, span_min, span_max, min_gap = map(
+        int, (num_blocks, span_min, span_max, min_gap)
+    )
+    if num_blocks < 1:
+        raise ValueError("num_blocks must be positive")
+    if span_min < 1 or span_max < span_min:
+        raise ValueError("span bounds must satisfy 1 <= span_min <= span_max")
+    if min_gap < 0:
+        raise ValueError("min_gap must be non-negative")
+    joint_valid = paired_time_eligibility(eye_valid, pad_mask)
+    batch_size, n_time = joint_valid.shape
+    selected = torch.zeros_like(joint_valid)
+    positions = torch.arange(n_time, device=eye_valid.device).view(1, n_time)
+    lengths = torch.arange(span_min, span_max + 1, device=eye_valid.device)
+    for _ in range(num_blocks):
+        blocked = selected.clone()
+        for distance in range(1, min_gap + 1):
+            blocked[:, distance:] |= selected[:, :-distance]
+            blocked[:, :-distance] |= selected[:, distance:]
+        available = joint_valid & ~blocked
+        windows = [_window_is_available(available, int(length)) for length in lengths]
+        feasible = torch.stack([window.any(dim=1) for window in windows], dim=1)
+        noise = torch.rand(
+            batch_size, len(lengths), generator=generator, device=eye_valid.device
+        ).masked_fill(~feasible, float("-inf"))
+        active = feasible.any(dim=1)
+        chosen_indices = noise.argmax(dim=1)
+        additions = torch.zeros_like(selected)
+        start_noise = torch.rand(
+            batch_size, n_time, generator=generator, device=eye_valid.device
+        )
+        for length_index, length in enumerate(lengths.tolist()):
+            rows = active & (chosen_indices == length_index)
+            candidates = windows[length_index]
+            starts = start_noise[:, : candidates.shape[1]].masked_fill(
+                ~candidates, float("-inf")
+            ).argmax(dim=1)
+            additions |= rows.unsqueeze(1) & (
+                (positions >= starts.unsqueeze(1))
+                & (positions < (starts + length).unsqueeze(1))
+            )
+        selected |= additions
     selected &= joint_valid
     return _pack_paired_time_mask(selected, with_cls=with_cls)
 

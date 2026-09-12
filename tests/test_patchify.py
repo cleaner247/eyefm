@@ -14,14 +14,14 @@ def _processed(t: int):
 
 
 def test_patch_counts_and_shapes() -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     assert patchify_preprocessed_trial(_processed(1000), cfg)["content"].shape == (50, 2, 20, 4)
     assert patchify_preprocessed_trial(_processed(1025), cfg)["content"].shape[0] == 51
     assert patchify_preprocessed_trial(_processed(19), cfg) is None
 
 
 def test_nonmissing_fraction_and_validity() -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     trial = _processed(40)
     trial["quality"][:20, 0, 0] = 1.0
     patched = patchify_preprocessed_trial(trial, cfg)

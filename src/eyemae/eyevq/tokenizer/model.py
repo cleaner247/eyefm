@@ -107,6 +107,117 @@ class TransformerBlock(nn.Module):
         return x
 
 
+class AxialCrossTransformerBlock(nn.Module):
+    """Two-axis S/L/R block with two attentions and one feed-forward network.
+
+    The input layout is ``[CLS, S0, L0, R0, S1, L1, R1, ...]``.  Attention is
+    applied in two stages:
+
+    1. temporal self-attention on S alone and on ``[CLS, L, R]`` alone;
+    2. local cross-channel attention within each aligned ``(S_t, L_t, R_t)``.
+
+    The two temporal groups share the second attention's parameters.  This
+    keeps the definition at exactly two attention modules per layer instead of
+    accidentally doubling both attention and FFN capacity.
+    """
+
+    def __init__(self, dim: int, heads: int, ffn_hidden: int, dropout: float) -> None:
+        super().__init__()
+        if dim % heads != 0:
+            raise ValueError(f"dim={dim} must be divisible by heads={heads}")
+        self.dim = dim
+        self.heads = heads
+        self.head_dim = dim // heads
+        self.local_norm = RMSNorm(dim)
+        self.local_qkv = nn.Linear(dim, dim * 3)
+        self.local_out = nn.Linear(dim, dim)
+        self.temporal_norm = RMSNorm(dim)
+        self.temporal_qkv = nn.Linear(dim, dim * 3)
+        self.temporal_out = nn.Linear(dim, dim)
+        self.attn_drop = nn.Dropout(dropout)
+        self.ffn_norm = RMSNorm(dim)
+        self.ffn = SwiGLU(dim, ffn_hidden, dropout)
+        self.ffn_drop = nn.Dropout(dropout)
+
+    def _attention(
+        self,
+        x: torch.Tensor,
+        key_padding_mask: torch.Tensor,
+        qkv_proj: nn.Linear,
+        out_proj: nn.Linear,
+    ) -> torch.Tensor:
+        batch, length, dim = x.shape
+        qkv = qkv_proj(x).reshape(
+            batch, length, 3, self.heads, self.head_dim
+        ).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)
+        valid_keys = (~key_padding_mask).unsqueeze(1).unsqueeze(2)
+        attended = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=valid_keys,
+            dropout_p=0.0 if not self.training else self.attn_drop.p,
+            is_causal=False,
+        )
+        attended = attended.permute(0, 2, 1, 3).reshape(batch, length, dim)
+        return out_proj(attended)
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        key_padding_mask: torch.Tensor,
+        n_time: int,
+    ) -> torch.Tensor:
+        batch, total_len, dim = x.shape
+        expected_len = 1 + 3 * n_time
+        if total_len != expected_len or key_padding_mask.shape != (batch, expected_len):
+            raise ValueError(
+                "axial-cross attention requires [CLS,S,L,R] interleaving: "
+                f"x={tuple(x.shape)}, mask={tuple(key_padding_mask.shape)}, "
+                f"n_time={n_time}"
+            )
+
+        # Axis 1: one shared temporal attention, evaluated independently for
+        # the S stream and the [CLS,L,R] stream. No edge crosses the streams.
+        cls = x[:, :1]
+        body = x[:, 1:].reshape(batch, n_time, 3, dim)
+        body_mask = key_padding_mask[:, 1:].reshape(batch, n_time, 3)
+        temporal_body = self.temporal_norm(body)
+        s_stream = temporal_body[:, :, 0]
+        s_mask = body_mask[:, :, 0]
+        s_update = self._attention(
+            s_stream, s_mask, self.temporal_qkv, self.temporal_out
+        )
+
+        lr_stream = temporal_body[:, :, 1:].reshape(batch, n_time * 2, dim)
+        lr_mask = body_mask[:, :, 1:].reshape(batch, n_time * 2)
+        cls_lr = torch.cat([self.temporal_norm(cls), lr_stream], dim=1)
+        cls_lr_mask = torch.cat([key_padding_mask[:, :1], lr_mask], dim=1)
+        cls_lr_update = self._attention(
+            cls_lr, cls_lr_mask, self.temporal_qkv, self.temporal_out
+        )
+
+        cls = cls + self.attn_drop(cls_lr_update[:, :1])
+        s_body = body[:, :, 0] + self.attn_drop(s_update)
+        lr_body = body[:, :, 1:] + self.attn_drop(
+            cls_lr_update[:, 1:].reshape(batch, n_time, 2, dim)
+        )
+        body = torch.cat([s_body.unsqueeze(2), lr_body], dim=2)
+
+        # Axis 2: aligned local S/L/R attention after each stream has first
+        # built its temporal context. CLS bypasses this cross-channel stage.
+        local = self.local_norm(body).reshape(batch * n_time, 3, dim)
+        local_mask = body_mask.reshape(batch * n_time, 3)
+        local = self._attention(
+            local, local_mask, self.local_qkv, self.local_out
+        ).reshape(batch, n_time, 3, dim)
+        body = body + self.attn_drop(local)
+
+        x = torch.cat([cls, body.reshape(batch, n_time * 3, dim)], dim=1)
+        return x + self.ffn_drop(self.ffn(self.ffn_norm(x)))
+
+
 # ──────────────────────────────────────────────
 # Constants
 # ──────────────────────────────────────────────
@@ -214,6 +325,7 @@ class ViTEncoder(nn.Module):
         patch_samples: int = 20,
         stim_isolated_attn: bool = False,
         stim_attend_cls: bool = True,
+        attention_layout: str = "joint",
         include_stim: bool = True,   # False → L/R-only encoder (分离架构)
         with_cls: bool = True,       # False → 无 enc_cls (分离架构 L/R encoder)
         min_nonmissing_frac: float = 0.50,
@@ -223,6 +335,14 @@ class ViTEncoder(nn.Module):
         self.patch_samples = patch_samples
         self.stim_isolated_attn = stim_isolated_attn
         self.stim_attend_cls = bool(stim_attend_cls)
+        if attention_layout not in {"joint", "axial_cross"}:
+            raise ValueError(
+                "attention_layout must be 'joint' or 'axial_cross', "
+                f"got {attention_layout!r}"
+            )
+        if attention_layout == "axial_cross" and (not include_stim or not with_cls):
+            raise ValueError("axial_cross attention requires S and CLS tokens")
+        self.attention_layout = attention_layout
         self.include_stim = include_stim
         self.with_cls = with_cls
         self.min_nonmissing_frac = float(min_nonmissing_frac)
@@ -251,9 +371,13 @@ class ViTEncoder(nn.Module):
         nn.init.normal_(self.quality_embed.weight, std=0.02)
 
         # Pre-norm Transformer blocks (EyeMAE-aligned)
+        block_cls = (
+            AxialCrossTransformerBlock
+            if attention_layout == "axial_cross"
+            else TransformerBlock
+        )
         self.blocks = nn.ModuleList([
-            TransformerBlock(d_model, n_heads, dim_ff, dropout)
-            for _ in range(n_layers)
+            block_cls(d_model, n_heads, dim_ff, dropout) for _ in range(n_layers)
         ])
         self.out_norm = RMSNorm(d_model)
 
@@ -362,7 +486,10 @@ class ViTEncoder(nn.Module):
 
         h = seq
         for block in self.blocks:
-            h = block(h, key_padding_mask=key_padding_mask, attn_mask=attn_mask)
+            if self.attention_layout == "axial_cross":
+                h = block(h, key_padding_mask=key_padding_mask, n_time=N)
+            else:
+                h = block(h, key_padding_mask=key_padding_mask, attn_mask=attn_mask)
         hidden = self.out_norm(h)
 
         # ── 7. Split back ──
@@ -865,6 +992,7 @@ class EyeVQTokenizer(nn.Module):
         dropout: float = 0.0,
         stim_isolated_attn: bool = True,
         stim_attend_cls: bool = True,
+        attention_layout: str = "joint",
         architecture: str = "joint",       # "joint" or "cross_attention"
         s_enc_n_layers: int = 3,
         feat_dec_n_layers: int = 3,
@@ -888,6 +1016,7 @@ class EyeVQTokenizer(nn.Module):
             dim_ff=enc_dim_ff, dropout=dropout, max_patches=max_patches,
             patch_samples=patch_samples, stim_isolated_attn=stim_isolated_attn,
             stim_attend_cls=stim_attend_cls,
+            attention_layout=attention_layout,
             include_stim=not is_cross, with_cls=not is_cross,
             min_nonmissing_frac=min_nonmissing_frac,
         )
@@ -906,8 +1035,20 @@ class EyeVQTokenizer(nn.Module):
                 codebook_size=eye_codebook_size,
                 commitment_beta=commitment_beta,
             )
+        elif vq_type == "ae":
+            # Continuous autoencoder baseline: no rounding, lookup table, or
+            # straight-through estimator.  The latent is normalized immediately
+            # before every decoder so its scale is fixed and can also be used as
+            # a stable offline regression target for BERT.
+            self.eye_codebook = nn.Identity()
         else:
             raise ValueError(f"Unsupported vq_type={vq_type!r}")
+        self.decoder_latent_norm = (
+            # Non-affine normalization is deliberate: a learnable gamma/beta
+            # could undo the fixed-scale contract used by the BERT MSE cache.
+            nn.LayerNorm(eye_code_dim, elementwise_affine=False)
+            if vq_type == "ae" else nn.Identity()
+        )
 
         if is_cross:
             self.recon_decoder = ViTDecoder(
@@ -967,7 +1108,12 @@ class EyeVQTokenizer(nn.Module):
             [enc["l_hidden"], enc["r_hidden"]], dim=2
         ).reshape(B, N * 2, self.d_model)
         z_e = self.vq_proj(lr_hidden)
-        if quantize:
+        if self.vq_type == "ae":
+            z_q_st = z_e
+            code_ids = torch.zeros(B, N * 2, dtype=torch.long, device=z_e.device)
+            commit = z_e.new_zeros(())
+            vq_stats = {}
+        elif quantize:
             z_q_st, code_ids, _z_q, commit, vq_stats = self.eye_codebook(z_e)
         else:
             # Legacy continuous warmup, when explicitly requested, removes
@@ -981,6 +1127,7 @@ class EyeVQTokenizer(nn.Module):
             commit = z_e.new_zeros(())
             vq_stats = {}
         z_q_lr = z_q_st.reshape(B, N, 2, self.eye_code_dim)
+        z_q_lr = self.decoder_latent_norm(z_q_lr)
         return enc, s_hidden, z_q_lr, code_ids.reshape(B, N, 2), vq_stats, commit
 
     def forward(
@@ -1031,3 +1178,20 @@ class EyeVQTokenizer(nn.Module):
             stim, content, quality, pad_mask, eye_nonmissing_frac, True
         )
         return code_ids
+
+    @torch.no_grad()
+    def encode_latents(
+        self,
+        stim: torch.Tensor,
+        content: torch.Tensor,
+        quality: torch.Tensor,
+        pad_mask: torch.Tensor,
+        eye_nonmissing_frac: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Return decoder-normalized continuous eye latents ``[B,N,2,D]``."""
+        if self.vq_type != "ae":
+            raise ValueError("encode_latents is only defined for vq.type=ae")
+        _enc, _s, latents, _ids, _stats, _commit = self._encode_and_quantize(
+            stim, content, quality, pad_mask, eye_nonmissing_frac, False
+        )
+        return latents

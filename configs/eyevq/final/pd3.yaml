@@ -5,12 +5,18 @@ model:
   classifier_hidden: 128
   classifier_head: mlp
   dropout: 0.3
+label:
+  type: hierarchical_pd3
+  num_classes: 3
+  class_names: [control, parkinson_spectrum, tremor_spectrum]
+  # Source PD5 classes: 0 control, 1 PD, 2 tremor, 3 ET, 4 movement disorder.
+  # Scheme B: PD + movement disorder; tremor + essential tremor.
+  remap: {'0': 0, '1': 1, '2': 2, '3': 2, '4': 1}
 mil:
   task_ids: [0, 1, 2, 3]
   task_names: [ProSaccade, AntiSaccade, MemorySaccade, DoubleSaccade]
   subjects_per_gpu: 4
   class_sampling: epoch_shuffle_no_class_quota
-  # K16 is validation-selected for MCI and reduces seed/trial-sampling variance.
   trials_per_task: 16
   eligibility_min_trials_per_task: 16
   evaluation_min_trials_per_task: 4
@@ -22,8 +28,10 @@ mil:
   eval_use_all_trials: true
 train:
   seed: 42
-  class_weighting: subject_pos_weight
-  epochs: 10
+  # Equal head losses; inverse-frequency subject weighting inside each head.
+  class_weighting: subject_inverse_frequency
+  hierarchical_head_weighting: equal
+  epochs: 15
   encoder_lr: 5.0e-5
   head_lr: 5.0e-5
   encoder_min_lr: 5.0e-6
@@ -37,11 +45,16 @@ train:
   num_workers: 4
   prefetch_factor: 4
   eval_trial_batch_size: 64
-  early_stopping_metric: val/subject/auroc
-  early_stopping_min_epochs: 10
-  early_stopping_patience_epochs: 11
+  # Select by threshold-independent validation macro one-vs-rest AUROC.
+  # Final PD3 reporting remains BalAcc / weighted F1 / Cohen's kappa.
+  selection_metric: macro_auroc_ovr
+  early_stopping_metric: val/subject/macro_auroc_ovr
+  early_stopping_min_epochs: 15
+  early_stopping_patience_epochs: 16
+  # Test is evaluated once after validation selects and reloads ckpt_best.pt.
   periodic_test_every_epochs: 0
   num_trial_views: 1
+  trial_view_aggregation: independent_loss
   trial_view_consistency_weight: 0.0
   auxiliary_task_loss_weight: 0.0
   feature_mixup_alpha: 0.0
@@ -49,7 +62,7 @@ data:
   pretraining_overlap_policy: allow_unlabeled_target_trials
   area_stats_mode: per_subject_transductive
   require_any_eye_keep: true
-  data_dir: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/finetune/mci_binary
+  data_dir: /mnt/disk_sde/hjf/eyemae_fast_dataset_v6/finetune/pd_related_3class_scheme_b
   train_index: train.csv
   val_index: validation.csv
   test_index: test.csv
@@ -60,6 +73,3 @@ demographics:
   projection_dim: 0
   age_encoding: zscore
   features: [age, education, sex]
-label:
-  type: binary
-  num_classes: 2

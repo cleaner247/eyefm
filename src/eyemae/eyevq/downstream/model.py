@@ -29,6 +29,8 @@ class EyeVQForClassification(nn.Module):
         # invariant.
         self.bert.embed.mask_token.requires_grad_(False)
         self.bert.pred_head.requires_grad_(False)
+        if self.bert.manual_feat_head is not None:
+            self.bert.manual_feat_head.requires_grad_(False)
         if self.bert.span_length_embed is not None:
             self.bert.span_length_embed.requires_grad_(False)
         d_model = bert.d_model

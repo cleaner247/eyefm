@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import hashlib
 import json
 import math
 import os
+import sys
+import warnings
 import subprocess
 import time
 from copy import deepcopy
@@ -26,13 +27,7 @@ from eyemae.eyevq.artifacts import (
     validate_cache_identity,
 )
 from eyemae.eyevq.config import validate_bert_config, validate_tokenizer_config
-from eyemae.eyevq.search import checkpoint_step
-from eyemae.downstream_metrics import (
-    compute_binary_metrics,
-    compute_multiclass_metrics,
-    sigmoid,
-    softmax,
-)
+from eyemae.eyevq.artifacts import checkpoint_step
 from eyemae.utils import write_json
 
 
@@ -42,16 +37,12 @@ FINAL_CONFIG_DIR = PROJECT_ROOT / "configs/eyevq/final"
 
 def _source_identity() -> dict[str, Any]:
     """Hash the complete executable/configuration surface of a formal run."""
-    # Local research scratch modules are deliberately outside the formal
-    # dependency graph and must not make an otherwise identical run identity
-    # machine-specific.
-    excluded_scratch_modules = {"dual_finetune.py", "feature_extracture.py"}
     files = sorted(
         path
         for path in (PROJECT_ROOT / "src/eyemae").rglob("*.py")
-        if path.name not in excluded_scratch_modules
     )
     files.extend(sorted(FINAL_CONFIG_DIR.glob("*.yaml")))
+    files.extend(sorted(FINAL_CONFIG_DIR.glob("*.json")))
     files.extend((PROJECT_ROOT / "pyproject.toml", PROJECT_ROOT / "scripts/run_eyevq_final.sh"))
     identities = [
         {
@@ -98,11 +89,13 @@ def _quarantine(path: Path, reason: str) -> Path | None:
 
 
 class Pipeline:
-    def __init__(self, output_root: Path, python_env: Path, nproc: int) -> None:
+    def __init__(self, output_root: Path, python_env: Path, nproc: int,
+                 finetune_nproc: int = 1) -> None:
         self.output_root = output_root.resolve()
         self.python = python_env / "bin/python"
         self.torchrun = python_env / "bin/torchrun"
         self.nproc = int(nproc)
+        self.finetune_nproc = int(finetune_nproc)
         self.state_path = self.output_root / "pipeline_state.json"
         if self.state_path.is_file():
             self.state = json.loads(self.state_path.read_text(encoding="utf-8"))
@@ -132,7 +125,7 @@ class Pipeline:
         self.bert_cfg["train"]["code_ids_cache"] = str(self.cache)
         self.downstream_cfgs = {
             task: _load_yaml(FINAL_CONFIG_DIR / f"{task}.yaml")
-            for task in ("mci", "pd5")
+            for task in ("mci", "pd3")
         }
         for cfg in self.downstream_cfgs.values():
             cfg["model"]["bert_checkpoint"] = str(self.bert_checkpoint)
@@ -140,6 +133,7 @@ class Pipeline:
             cfg["reproducibility"] = {
                 "recipe_version": int(self.recipe["recipe_version"]),
                 "source_sha256": self.source_identity["sha256"],
+                "world_size": self.finetune_nproc if "mil" in cfg else self.nproc,
             }
 
     def _assert_source_unchanged(self) -> None:
@@ -180,6 +174,11 @@ class Pipeline:
 
         validate_tokenizer_config(self.tokenizer_cfg)
         validate_bert_config(self.bert_cfg)
+        for section in (self.tokenizer_cfg["encoder"], self.bert_cfg["bert"]):
+            if (section["n_layers"], section["d_model"], section["n_heads"], section["dim_ff"]) != (12, 384, 8, 1152):
+                raise ValueError("Formal recipe requires the 12-layer 384/8/1152 reference")
+        if self.downstream_cfgs["pd3"]["label"]["type"] != "hierarchical_pd3":
+            raise ValueError("Formal PD3 requires hierarchical sigmoid heads")
         if self.tokenizer_cfg["model"]["architecture"] != "joint":
             raise ValueError("Formal tokenizer must use joint self-attention")
         for name, cfg in (("tokenizer", self.tokenizer_cfg), ("bert", self.bert_cfg)):
@@ -189,16 +188,19 @@ class Pipeline:
         if self.bert_cfg["bert"].get("factorized_fsq") is not True:
             raise ValueError("Formal BERT must use factorized FSQ prediction")
         expected_mask = {
-            "mode": "paired_span",
-            "eye_masking_ratio": 0.60,
-            "span_min_patches": 1,
-            "span_max_patches": 5,
-            "span_length_distribution": "uniform",
+            "mode": "paired_dual_scale",
+            "dual_short_num_blocks": 15,
+            "dual_short_span_min_patches": 1,
+            "dual_short_span_max_patches": 3,
+            "dual_long_num_blocks": 5,
+            "dual_long_span_min_patches": 4,
+            "dual_long_span_max_patches": 6,
+            "dual_min_gap": 1,
         }
         for key, value in expected_mask.items():
             if self.bert_cfg["mask"].get(key) != value:
                 raise ValueError(f"Formal BERT mask mismatch for {key}")
-        for task in ("mci", "pd5"):
+        for task in ("mci", "pd3"):
             mil = self.downstream_cfgs[task]["mil"]
             if mil["trials_per_task"] != 16:
                 raise ValueError(f"Formal {task.upper()} recipe must use K16")
@@ -212,7 +214,7 @@ class Pipeline:
             raise ValueError("Tokenizer data path does not match formal dataset")
         if Path(self.bert_cfg["train"]["data_path"]).resolve() != expected_pretrain:
             raise ValueError("BERT data path does not match formal dataset")
-        for task, directory in (("mci", "mci_binary"), ("pd5", "pd_related_5class")):
+        for task, directory in (("mci", "mci_binary"), ("pd3", "pd_related_3class_scheme_b")):
             expected = dataset_root / "finetune" / directory
             if Path(self.downstream_cfgs[task]["data"]["data_dir"]).resolve() != expected:
                 raise ValueError(f"{task} data path does not match formal dataset")
@@ -248,10 +250,16 @@ class Pipeline:
                 >= float(gate["min_per_dimension_accuracy"]),
             }
         failed = [name for name, passed in checks.items() if not passed]
+        for key in checks:
+            values = metrics.get(key)
+            values = values if isinstance(values, list) else [values]
+            if not values or any(v is None or not math.isfinite(float(v)) for v in values):
+                raise RuntimeError(f"{stage} missing/non-finite diagnostic: {key}")
         if failed:
-            raise RuntimeError(
-                f"{stage} failed formal quality gate for {failed}: {metrics}"
-            )
+            message = f"{stage} failed formal quality gate for {failed}: {metrics}"
+            if self.recipe["quality_gates"].get("mode", "strict") == "strict":
+                raise RuntimeError(message)
+            warnings.warn(message, RuntimeWarning)
 
     def save_state(self) -> None:
         self.output_root.mkdir(parents=True, exist_ok=True)
@@ -266,8 +274,8 @@ class Pipeline:
         self.save_state()
 
     def preflight(self) -> None:
-        if self.nproc <= 0:
-            raise ValueError("nproc must be positive")
+        if self.nproc <= 0 or self.finetune_nproc <= 0:
+            raise ValueError("nproc and finetune_nproc must be positive")
         if not self.python.is_file() or not self.torchrun.is_file():
             raise FileNotFoundError(f"Invalid Python environment: {self.python.parent.parent}")
         self._validate_formal_recipe()
@@ -323,9 +331,9 @@ class Pipeline:
             self.set_stage(name, "failed", returncode=result.returncode, log=str(log_path))
             raise RuntimeError(f"Stage {name} failed; see {log_path}")
 
-    def _ddp(self, module: str, *arguments: str) -> list[str]:
+    def _ddp(self, module: str, *arguments: str, nproc: int | None = None) -> list[str]:
         return [
-            str(self.torchrun), "--standalone", f"--nproc_per_node={self.nproc}",
+            str(self.torchrun), "--standalone", f"--nproc_per_node={self.nproc if nproc is None else nproc}",
             "-m", module, *map(str, arguments),
         ]
 
@@ -344,7 +352,14 @@ class Pipeline:
         if not checkpoint.is_file():
             return False
         expected = build_run_identity(stage, cfg, dependencies=dependencies)
-        return checkpoint_has_identity(checkpoint, expected)
+        required_step = None
+        if checkpoint.name == "ckpt_final.pt":
+            train = cfg["train"]
+            required_step = (
+                int(train["total_steps"]) if stage == "bert" else
+                int(train.get("stage_a_steps", 0)) + int(train["stage_b_steps"])
+            )
+        return checkpoint_has_identity(checkpoint, expected, required_step=required_step)
 
     def _latest_valid_step_checkpoint(
         self,
@@ -484,6 +499,7 @@ class Pipeline:
                     self._ddp(
                         "eyemae.eyevq.downstream.train_mil",
                         "--config", str(cfg_path), "--output_dir", str(output),
+                        nproc=self.finetune_nproc,
                     ),
                     output / "pipeline.log",
                 )
@@ -502,7 +518,7 @@ class Pipeline:
             "bert_checkpoint": str(self.bert_checkpoint),
             "tasks": {},
         }
-        for task in ("mci", "pd5"):
+        for task in ("mci", "pd3"):
             payload["tasks"][task] = [
                 json.loads(
                     (self.output_root / "downstream" / task / f"seed{seed}" / "metrics_test.json")
@@ -510,92 +526,19 @@ class Pipeline:
                 )
                 for seed in (42, 43, 44)
             ]
-            payload["tasks"][task + "_ensemble"] = self._ensemble_task(task)
         write_json(self.output_root / "search_summary.json", {
             "selection_uses_test": False,
             "selected": {
                 "data": "V6 operational default with pinned V6-derived artifacts",
                 "tokenizer": "40K, joint stimulus-isolated tanh FSQ [9,7,5,5]",
-                "bert": "50K, paired span 1-5 uniform, mask 0.60, factorized heads",
-                "downstream": "top-8, LR 1e-5, MCI/PD5 K16, shared hidden-128 head",
+                "bert": "20K, dual-scale 15 short + 5 long blocks, factorized heads",
+                "downstream": "MCI + Scheme-B PD3, K16, shared hidden-128 head",
             },
-            "evidence": "docs/iclr_eyevq_paper.md#41-final-training-recipe-and-parameter-selection",
+            "evidence": "configs/eyevq/final/recipe.yaml",
         })
         write_json(self.output_root / "final_summary.json", payload)
         self.set_stage("summary", "complete", path=str(self.output_root / "final_summary.json"))
 
-    def _ensemble_task(self, task: str) -> dict[str, Any]:
-        output_dir = self.output_root / "downstream" / task / "ensemble"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        result: dict[str, Any] = {
-            "method": "mean logits across seeds 42/43/44",
-            "checkpoint_selection": "each seed independently selected by validation only",
-        }
-        for split, filename in (
-            ("val", "predictions_val_best.csv"),
-            ("test", "predictions_test.csv"),
-        ):
-            seed_rows: list[dict[str, dict[str, str]]] = []
-            for seed in (42, 43, 44):
-                path = self.output_root / "downstream" / task / f"seed{seed}" / filename
-                with path.open(newline="", encoding="utf-8") as handle:
-                    rows = {
-                        row["subject_key"]: row for row in csv.DictReader(handle)
-                    }
-                seed_rows.append(rows)
-            subjects = sorted(seed_rows[0])
-            if any(sorted(rows) != subjects for rows in seed_rows[1:]):
-                raise RuntimeError(f"{task} {split} ensemble subject sets differ across seeds")
-            labels = [int(seed_rows[0][subject]["label"]) for subject in subjects]
-            output_rows: list[dict[str, Any]] = []
-            if task == "mci":
-                logits = [
-                    sum(float(rows[subject]["logit"]) for rows in seed_rows) / 3.0
-                    for subject in subjects
-                ]
-                metrics = compute_binary_metrics(
-                    labels, logits, threshold=0.5, prefix=f"{split}/subject"
-                )
-                for subject, label, logit in zip(subjects, labels, logits):
-                    probability = sigmoid(logit)
-                    output_rows.append({
-                        "subject_key": subject,
-                        "label": label,
-                        "logit": logit,
-                        "prob": probability,
-                        "pred": int(probability >= 0.5),
-                    })
-            else:
-                logits = [
-                    [
-                        sum(float(rows[subject][f"logit_{class_id}"]) for rows in seed_rows) / 3.0
-                        for class_id in range(5)
-                    ]
-                    for subject in subjects
-                ]
-                metrics = compute_multiclass_metrics(
-                    labels, logits, num_classes=5, prefix=f"{split}/subject"
-                )
-                for subject, label, row_logits in zip(subjects, labels, logits):
-                    probabilities = softmax(row_logits)
-                    row: dict[str, Any] = {
-                        "subject_key": subject,
-                        "label": label,
-                        "pred": max(range(5), key=lambda class_id: probabilities[class_id]),
-                    }
-                    row.update({f"logit_{i}": value for i, value in enumerate(row_logits)})
-                    row.update({f"prob_{i}": value for i, value in enumerate(probabilities)})
-                    output_rows.append(row)
-            prediction_path = output_dir / f"predictions_{split}.csv"
-            temporary = prediction_path.with_suffix(".csv.tmp")
-            with temporary.open("w", newline="", encoding="utf-8") as handle:
-                writer = csv.DictWriter(handle, fieldnames=list(output_rows[0]))
-                writer.writeheader()
-                writer.writerows(output_rows)
-            temporary.replace(prediction_path)
-            result[split] = metrics
-        write_json(output_dir / "metrics.json", result)
-        return result
 
     def run(self, *, preflight_only: bool = False) -> None:
         self.output_root.mkdir(parents=True, exist_ok=True)
@@ -624,11 +567,12 @@ class Pipeline:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-root", default="outputs/eyevq/final")
-    parser.add_argument("--python-env", default="/home/jinfanhe/miniconda3/envs/jinf")
+    parser.add_argument("--python-env", default=sys.prefix)
     parser.add_argument("--nproc", type=int, default=4)
+    parser.add_argument("--finetune-nproc", type=int, default=1)
     parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args()
-    Pipeline(Path(args.output_root), Path(args.python_env), args.nproc).run(
+    Pipeline(Path(args.output_root), Path(args.python_env), args.nproc, args.finetune_nproc).run(
         preflight_only=args.preflight_only
     )
 

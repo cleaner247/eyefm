@@ -12,8 +12,10 @@ import torch
 from .pretrain.model import (
     EyeVQBERT,
     SUPPORTED_TARGET_TYPES,
+    TARGET_DIRECT_RECONSTRUCTION,
     TARGET_FACTORIZED_CODE,
     TARGET_JOINT_CODE,
+    TARGET_NORMALIZED_LATENT,
     TARGET_RAW_PATCH,
 )
 from .tokenizer.model import EyeVQTokenizer
@@ -50,7 +52,10 @@ def _quantizer_spec(cfg: dict[str, Any]) -> tuple[str, int, int, list[int] | Non
         return vq_type, code_dim, math.prod(levels_list), levels_list
     if vq_type == "vqvae":
         return vq_type, int(vq["code_dim"]), int(vq["codebook_size"]), None
-    raise ValueError(f"Unsupported vq.type={vq_type!r}; expected 'fsq' or 'vqvae'")
+    if vq_type == "ae":
+        code_dim = int(vq["code_dim"])
+        return vq_type, code_dim, code_dim, None
+    raise ValueError(f"Unsupported vq.type={vq_type!r}; expected 'fsq', 'vqvae', or 'ae'")
 
 
 # Kept as a private compatibility alias for older callers.
@@ -87,6 +92,9 @@ def validate_tokenizer_config(cfg: dict[str, Any]) -> None:
         cfg["attention"]["stim_attend_cls"], bool
     ):
         raise ValueError("attention.stim_attend_cls must be a boolean")
+    attention_layout = str(cfg["attention"].get("layout", "joint"))
+    if attention_layout not in {"joint", "axial_cross"}:
+        raise ValueError("attention.layout must be 'joint' or 'axial_cross'")
     if "num_features" not in cfg["manual_features"]:
         raise ValueError("Tokenizer config must explicitly declare manual_features.num_features")
     encoder = cfg["encoder"]
@@ -108,12 +116,14 @@ def validate_tokenizer_config(cfg: dict[str, Any]) -> None:
         alpha = float(cfg["vq"].get("ifsq_alpha", 1.6))
         if not math.isfinite(alpha) or alpha <= 0:
             raise ValueError(f"vq.ifsq_alpha must be finite and positive, got {alpha}")
-    else:
+    elif vq_type == "vqvae":
         if code_dim < 1 or codebook_size < 2:
             raise ValueError("VQ-VAE requires vq.code_dim >= 1 and vq.codebook_size >= 2")
         beta = float(cfg["vq"].get("commitment_beta", 0.25))
         if not math.isfinite(beta) or beta < 0:
             raise ValueError("vq.commitment_beta must be finite and non-negative")
+    elif code_dim < 1:
+        raise ValueError("Continuous AE requires vq.code_dim >= 1")
     tokenizer_architecture(cfg)
 
 
@@ -146,6 +156,7 @@ def build_tokenizer(cfg: dict[str, Any]) -> EyeVQTokenizer:
         dropout=float(encoder.get("dropout", 0.0)),
         stim_isolated_attn=bool(cfg.get("attention", {}).get("stim_isolated", True)),
         stim_attend_cls=bool(cfg.get("attention", {}).get("stim_attend_cls", True)),
+        attention_layout=str(cfg.get("attention", {}).get("layout", "joint")),
         architecture=architecture,
         s_enc_n_layers=int(model_section(cfg).get("stim_layers", 3)),
         feat_dec_n_layers=int(model_section(cfg).get("cross_layers", decoder["n_layers"])),
@@ -168,6 +179,9 @@ def validate_bert_config(cfg: dict[str, Any]) -> None:
         cfg["attention"]["stim_attend_cls"], bool
     ):
         raise ValueError("attention.stim_attend_cls must be a boolean")
+    attention_layout = str(cfg["attention"].get("layout", "joint"))
+    if attention_layout not in {"joint", "axial_cross"}:
+        raise ValueError("attention.layout must be 'joint' or 'axial_cross'")
     if int(bert["max_time"]) != int(bert["max_patches"]):
         raise ValueError("bert.max_time and bert.max_patches must match")
     if int(cfg["patch"]["samples"]) != int(cfg["patch"].get("stride", cfg["patch"]["samples"])):
@@ -188,13 +202,53 @@ def validate_bert_config(cfg: dict[str, Any]) -> None:
         raise ValueError("bert.factorized_fsq requires vq.type=fsq")
     if (target_type == TARGET_FACTORIZED_CODE) != factorized:
         raise ValueError("factorized_code target and bert.factorized_fsq must be enabled together")
-    if target_type == TARGET_RAW_PATCH:
-        for key in ("raw_continuous_weight", "raw_blink_weight"):
-            value = float(cfg["loss"].get(key, 1.0))
+    if target_type == TARGET_NORMALIZED_LATENT and vq_type != "ae":
+        raise ValueError("normalized_latent target requires vq.type=ae")
+    if vq_type == "ae" and target_type != TARGET_NORMALIZED_LATENT:
+        raise ValueError("vq.type=ae requires bert.target_type=normalized_latent")
+    if target_type in {TARGET_RAW_PATCH, TARGET_DIRECT_RECONSTRUCTION}:
+        raw_defaults = {
+            "raw_xy_weight": cfg["loss"].get("raw_continuous_weight", 1.0),
+            "raw_area_weight": cfg["loss"].get("raw_continuous_weight", 1.0),
+            "raw_blink_weight": 1.0,
+            "raw_blink_pos_weight": 1.0,
+            "raw_velocity_weight": 0.0,
+        }
+        for key, default in raw_defaults.items():
+            value = float(cfg["loss"].get(key, default))
             if not math.isfinite(value) or value < 0:
                 raise ValueError(f"loss.{key} must be finite and non-negative")
+        if float(cfg["loss"].get("raw_blink_pos_weight", 1.0)) <= 0.0:
+            raise ValueError("loss.raw_blink_pos_weight must be positive")
+    if target_type == TARGET_DIRECT_RECONSTRUCTION:
+        feature_cfg = cfg.get("manual_features", {})
+        if not bool(feature_cfg.get("enabled", False)):
+            raise ValueError(
+                "direct_reconstruction requires manual_features.enabled=true"
+            )
+        if int(feature_cfg.get("num_features", 0)) <= 0:
+            raise ValueError(
+                "direct_reconstruction requires manual_features.num_features > 0"
+            )
+        for key in (
+            "eye_recon_group_weight",
+            "manual_feature_group_weight",
+            "manual_feature_binary_weight",
+            "manual_feature_continuous_weight",
+        ):
+            value = float(cfg["loss"].get(key, math.nan))
+            if not math.isfinite(value) or value < 0.0:
+                raise ValueError(f"loss.{key} must be finite and non-negative")
+        if (
+            float(cfg["loss"]["eye_recon_group_weight"]) == 0.0
+            and float(cfg["loss"]["manual_feature_group_weight"]) == 0.0
+        ):
+            raise ValueError("direct_reconstruction requires a nonzero loss group")
     mode = str(cfg["mask"].get("mode", "paired_random"))
-    supported_modes = {"uniform", "paired_random", "paired_span", "paired_multiblock"}
+    supported_modes = {
+        "uniform", "paired_random", "paired_span", "paired_multiblock",
+        "paired_dual_scale",
+    }
     if mode not in supported_modes:
         raise ValueError(
             f"mask.mode must be one of {sorted(supported_modes)}, got {mode!r}; "
@@ -210,6 +264,17 @@ def validate_bert_config(cfg: dict[str, Any]) -> None:
             "mask span bounds must satisfy 1 <= span_min_patches <= "
             f"span_max_patches, got [{span_min}, {span_max}]"
         )
+    if mode == "paired_dual_scale":
+        for prefix in ("dual_short", "dual_long"):
+            blocks = int(cfg["mask"].get(f"{prefix}_num_blocks", 0))
+            lower = int(cfg["mask"].get(f"{prefix}_span_min_patches", 0))
+            upper = int(cfg["mask"].get(f"{prefix}_span_max_patches", 0))
+            if blocks < 1 or lower < 1 or upper < lower:
+                raise ValueError(
+                    f"mask.{prefix} requires positive blocks and valid span bounds"
+                )
+        if int(cfg["mask"].get("dual_min_gap", 1)) < 0:
+            raise ValueError("mask.dual_min_gap must be non-negative")
     predictor_span_embedding = bool(
         bert.get("predictor_span_length_embedding", False)
     )
@@ -263,7 +328,7 @@ def validate_bert_config(cfg: dict[str, Any]) -> None:
 def build_bert(cfg: dict[str, Any]) -> EyeVQBERT:
     validate_bert_config(cfg)
     bert = cfg["bert"]
-    vq_type, _code_dim, codebook_size, levels = _quantizer_spec(cfg)
+    vq_type, code_dim, codebook_size, levels = _quantizer_spec(cfg)
     fsq_levels = levels if vq_type == "fsq" and isinstance(levels, list) else None
     return EyeVQBERT(
         K_e=codebook_size,
@@ -277,6 +342,7 @@ def build_bert(cfg: dict[str, Any]) -> EyeVQBERT:
         label_smoothing=float(cfg.get("loss", {}).get("label_smoothing", 0.0)),
         stim_isolated_attn=bool(cfg.get("attention", {}).get("stim_isolated", True)),
         stim_attend_cls=bool(cfg.get("attention", {}).get("stim_attend_cls", True)),
+        attention_layout=str(cfg.get("attention", {}).get("layout", "joint")),
         factorized_fsq=bool(bert.get("factorized_fsq", False)),
         fsq_L=fsq_levels,
         min_nonmissing_frac=float(cfg["vq"].get("min_nonmissing_frac", 0.50)),
@@ -292,8 +358,26 @@ def build_bert(cfg: dict[str, Any]) -> EyeVQBERT:
                 else TARGET_JOINT_CODE,
             )
         ),
-        raw_continuous_weight=float(cfg["loss"].get("raw_continuous_weight", 1.0)),
+        latent_dim=code_dim,
+        raw_xy_weight=float(
+            cfg["loss"].get(
+                "raw_xy_weight", cfg["loss"].get("raw_continuous_weight", 1.0)
+            )
+        ),
+        raw_area_weight=float(
+            cfg["loss"].get(
+                "raw_area_weight", cfg["loss"].get("raw_continuous_weight", 1.0)
+            )
+        ),
         raw_blink_weight=float(cfg["loss"].get("raw_blink_weight", 1.0)),
+        raw_blink_pos_weight=float(
+            cfg["loss"].get("raw_blink_pos_weight", 1.0)
+        ),
+        raw_velocity_weight=float(cfg["loss"].get("raw_velocity_weight", 0.0)),
+        manual_feature_dim=int(
+            cfg.get("manual_features", {}).get("num_features", 38)
+        ),
+        direct_loss_cfg=deepcopy(cfg["loss"]),
     )
 
 

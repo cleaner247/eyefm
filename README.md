@@ -1,80 +1,88 @@
-# EyeVQ / EyeFM
+# EyeFM / EyeVQ
 
-The canonical project path is `eyemae.eyevq`: discrete binocular tokenization,
-masked contextual pretraining, and subject-level multiple-instance fine-tuning.
-Legacy EyeMAE experiments remain reproducible, but they are not production
-defaults.
+Eye-movement representation learning: FSQ tokenizer → paired masked-code BERT
+pretraining → subject-level multi-instance fine-tuning. The Python package keeps
+the historical `eyemae` name for checkpoint/import compatibility; legacy EyeMAE
+training and external comparison methods are not included.
 
-## Canonical pipeline
+## Installation
 
-```text
-V6 packed trials
-  -> valid-eye filtering + per-subject/per-eye median-MAD area normalization
-  -> non-overlapping 40-sample stimulus/left/right patches
-  -> 12-layer joint stimulus-isolated tokenizer
-  -> tanh FSQ [9,7,5,5] and quantized reconstruction
-  -> SHA-bound offline code-ID cache
-  -> 12-layer paired-span factorized-code BERT
-  -> strict four-task subject MIL for MCI and PD5
-```
-
-Stimulus queries read stimulus tokens only. They never read CLS or L/R; CLS and
-eye queries may read stimulus and eye tokens. BERT masks L/R together only when
-both patches contain at least 85% nonmissing frames.
-
-The single source of truth is:
-
-- `configs/eyevq/final/recipe.yaml`: data contract, evidence status and gates.
-- `configs/eyevq/final/tokenizer.yaml`: tokenizer model and optimization.
-- `configs/eyevq/final/bert.yaml`: contextual pretraining.
-- `configs/eyevq/final/mci.yaml`: MCI K16 subject adaptation.
-- `configs/eyevq/final/pd5.yaml`: PD5 K16 subject adaptation.
-
-V6 is the operational default dataset. It repacks the V5 payload without adding
-another filter, preserves the established splits and source frame labels, and
-therefore inherits the guarded 75-Hz filtering already present in V5. Its area
-statistics and manual features were recomputed from V6 and are SHA-pinned.
-
-The currently running V6 job also tests a different BERT masking candidate. Its
-resolved configuration and logs live under its output directory; that mask
-candidate does not replace the default model geometry until validation is
-complete.
-
-## Run
-
-Install and verify:
+Python 3.10+ and PyTorch are required. From the repository root:
 
 ```bash
 python -m pip install -e '.[test]'
-PYTHONPATH=src pytest -q
-python -m compileall -q src/eyemae
+python -m pytest tests -q
 ```
 
-Read-only preflight:
+## Twelve-layer reference
+
+Only one model-size recipe is published in `configs/eyevq/final/`:
+
+| Stage | Reference setting |
+| --- | --- |
+| Tokenizer | 12 × 384 encoder, 8 heads, FFN 1152; 3-layer decoder; tanh FSQ [9,7,5,5]; 40K steps |
+| BERT | 12 × 384, 8 heads, FFN 1152; factorized CE; 20K steps |
+| Masking | Independent short (15 blocks, lengths 1–3) and long (5 blocks, lengths 4–6) views; valid paired eyes only |
+| Fine-tuning | All embeddings/layers trainable; K16 per task; 4 subjects/GPU; LR 5e-5 → 5e-6 |
+| MCI / other binary tasks | 10 epochs; subject-weighted BCE |
+| PD3 | 15 epochs; two sigmoid heads; equal head losses with within-head subject inverse-frequency weights |
+
+The tokenizer uses 40-sample non-overlapping patches, stimulus-isolated attention
+(stimulus cannot read CLS or eyes), per-subject/per-eye area normalization and
+38-dimensional manual-feature supervision. BERT duplicates each batch into
+independently masked short/long views; `max_trials_per_gpu: 64` is before that
+duplication. Factorized CE is summed across FSQ dimensions and reduced per trial.
+
+## Data and execution
+
+Clinical data, subject split manifests, normalization statistics, manual-feature
+caches, checkpoints and experiment results are external inputs, not shipped.
+The checked-in recipe pins the existing V6 dataset and derived artifacts. Its
+absolute paths describe the reference machine. On another machine, provision
+the matching inputs and update paths consistently in the YAMLs and artifact
+manifest, then recompute the manifest SHA256 in `recipe.yaml`. Do not bypass hash
+checks or reuse checkpoints after changing data/configuration.
+
+Run from the repository root. The default pipeline runs MCI and PD3 for seeds
+42/43/44. Pretraining uses four GPUs; fine-tuning uses one GPU to preserve the
+reference batch size. `CUDA_VISIBLE_DEVICES` selects the devices.
 
 ```bash
-scripts/run_eyevq_final.sh --preflight-only
+bash scripts/run_eyevq_final.sh --preflight-only
+bash scripts/run_eyevq_final.sh
+# Optional detached execution (requires tmux):
+bash scripts/run_eyevq_final.sh --detached
 ```
 
-Detached four-GPU run:
+`PYTHON_ENV` defaults to the current Python environment. `OUTPUT_ROOT`,
+`NPROC_PER_NODE` and `FINETUNE_NPROC` override the output location and process
+counts. Changing GPU count changes global batch size and is not the exact
+reference protocol. Only trusted local checkpoints/caches should be loaded.
+
+Individual stages are also available:
 
 ```bash
-CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  OUTPUT_ROOT=outputs/eyevq/final \
-  scripts/run_eyevq_final.sh --detached
+python -m eyemae.eyevq.tokenizer.train --config configs/eyevq/final/tokenizer.yaml --output_dir outputs/eyevq/final/tokenizer
+python -m eyemae.eyevq.precompute_codes --help
+python -m eyemae.eyevq.pretrain.train --config configs/eyevq/final/bert.yaml --output_dir outputs/eyevq/final/bert
+python -m eyemae.eyevq.downstream.train_mil --config configs/eyevq/final/mci.yaml --output_dir outputs/eyevq/final/downstream/mci/seed42
+python -m eyemae.eyevq.downstream.evaluate_mil --help
 ```
 
-The pipeline fails closed when the dataset contract, source hash, upstream
-checkpoint/cache identity, architecture invariants, or validation quality gate
-does not match. Checkpoints and large training outputs are never stored in Git.
+Binary task configs are provided for MCI, AD, Detox, epilepsy and migraine;
+PD3 uses the Scheme-B label mapping documented in its config. Run the other
+binary tasks through `train_mil` with their corresponding config.
 
-## Documentation
+## Evaluation and reproducibility
 
-- Architecture and operational contract: `src/eyemae/eyevq/README.md`
-- Authoritative code map and terminology: `docs/code_structure.md`
-- Data lineage and experiment summary: `docs/eyevq_project_report_20260825.md`
-- Paper draft: `docs/iclr_eyevq_paper.md`
+Subject-level train/validation/test separation is audited before fine-tuning.
+Checkpoint selection uses validation metrics; periodic test evaluation is off
+in the published configs. The pipeline reports each seed separately, without
+automatic cross-seed ensembling. Historical test sets were observed during
+development: this is an internal exploratory protocol, not an untouched external
+test. Unlabeled target-subject pretraining overlap and transductive per-subject
+normalization are explicitly declared.
 
-All reported test results are internal exploratory results because the test set
-was observed during model development. Automated selection and early stopping
-use validation data only.
+Empirical quality thresholds are advisory; missing/non-finite diagnostics and
+artifact identity mismatches remain fatal. See `docs/core_audit.md` for cleanup
+scope and verification limits.

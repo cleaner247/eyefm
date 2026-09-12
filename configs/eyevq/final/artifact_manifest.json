@@ -1,0 +1,23 @@
+{
+  "dataset": "eyemae_fast_dataset_v6",
+  "reason": "all normalization statistics and manual features recomputed from V6",
+  "area_stats": "/mnt/disk_sde/hjf/pxy_eyefm/outputs/eyevq/v6_shared/area_stats_per_subject_eye_all_seed42.json",
+  "manual_features_train": "/mnt/disk_sde/hjf/pxy_eyefm/outputs/eyevq/v6_shared/manual_features/train.pt",
+  "manual_features_validation": "/mnt/disk_sde/hjf/pxy_eyefm/outputs/eyevq/v6_shared/manual_features/validation.pt",
+  "manual_features_cache": "/mnt/disk_sde/hjf/pxy_eyefm/outputs/eyevq/v6_shared/manual_features/trial_metrics_38d_train_val.pt",
+  "manual_feature_stats": "/mnt/disk_sde/hjf/pxy_eyefm/outputs/eyevq/v6_shared/manual_features/trial_metric_stats_38d_train.json",
+  "trial_counts": {
+    "train": 580190,
+    "validation": 32401
+  },
+  "cache_trials": 612591,
+  "additional_filtering": false,
+  "source_dataset": "eyemae_fast_dataset_v5",
+  "inherited_signal_filter_policy": "guarded_75hz_butterworth_lowpass",
+  "area_stats_sha256": "3024309973260e7cace2d2105840ea667261e60d7d91fecfcd2e3591bd01d160",
+  "manual_features_cache_sha256": "d86c34f473dd1e229b72c8271459f0a0e1cab4d6bb5036f0f345b9d04ff6d264",
+  "manual_feature_stats_sha256": "7cda4e6c216d3128bd2da9315ed94858a54a9d44ba77275e40f6fd4b0c46cd45",
+  "task_metric_weight_sha256": "5a5d2a859052aa91d46e62b2084b2094db571aed437b87e0be93ecbeba341c23",
+  "v6_build_audit": "/mnt/disk_sde/hjf/eyemae_fast_dataset_v6/v6_build_audit.json",
+  "area_stats_verification": "Matches area_stats dependency recorded in completed 12-layer dual_short15_long5_factorized BERT step020000 checkpoint."
+}

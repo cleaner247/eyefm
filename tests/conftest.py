@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 @pytest.fixture
 def debug_cfg() -> dict:
-    return load_config(str(ROOT / "configs" / "debug.yaml"))
+    return load_config(str(ROOT / "tests" / "fixtures" / "preprocessing.yaml"))
 
 
 @pytest.fixture

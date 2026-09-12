@@ -27,7 +27,7 @@ def test_area_stats_train_only_and_fallback(tmp_path: Path) -> None:
     (splits / "pretrain_train.txt").write_text("s001D/train.npz\n", encoding="utf-8")
     (splits / "pretrain_val.txt").write_text("s002D/val.npz\n", encoding="utf-8")
     (splits / "pretrain_test.txt").write_text("", encoding="utf-8")
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     cfg["data"]["data_dir"] = str(data)
     cfg["data"]["pretrain_train_split"] = str(splits / "pretrain_train.txt")
     cfg["data"]["pretrain_val_split"] = str(splits / "pretrain_val.txt")
@@ -48,7 +48,7 @@ def test_area_stats_enforces_suffix_eye_availability_by_default(tmp_path: Path) 
     splits = tmp_path / "splits"
     splits.mkdir()
     (splits / "pretrain_train.txt").write_text("s001L/train.npz\n", encoding="utf-8")
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     cfg["data"]["data_dir"] = str(data)
     cfg["data"]["pretrain_train_split"] = str(splits / "pretrain_train.txt")
     cfg["area"]["stats_path"] = str(tmp_path / "stats.json")
@@ -63,7 +63,7 @@ def test_area_stats_enforces_suffix_eye_availability_by_default(tmp_path: Path) 
 
 
 def test_area_stats_trial_final_keep_overrides_decodable_d_suffix() -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     eye = np.zeros((4, 8), dtype=np.float32)
     eye[:, 2] = 100.0
     eye[:, 6] = 200.0
@@ -79,7 +79,7 @@ def test_area_stats_trial_final_keep_overrides_decodable_d_suffix() -> None:
 
 
 def test_area_stats_excludes_nonfinite_and_nonpositive_area() -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     eye = np.zeros((5, 8), dtype=np.float32)
     eye[:, 2] = [100.0, 0.0, -1.0, np.nan, np.inf]
     eye[:, 6] = 200.0
@@ -109,7 +109,7 @@ def test_area_stats_keeps_distinct_left_right_statistics(tmp_path: Path) -> None
     )
     split = tmp_path / "train.txt"
     split.write_text("s001D/train.npz\n", encoding="utf-8")
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     cfg["data"]["data_dir"] = str(data)
     cfg["data"]["pretrain_train_split"] = str(split)
     cfg["area"]["stats_path"] = str(tmp_path / "stats.json")

@@ -87,6 +87,24 @@ def _weighted_f1_from_confusion(matrix: list[list[int]], f1s: list[float]) -> fl
     return numerator / float(total)
 
 
+def _finite_support_weighted_mean(
+    values: list[float], supports: list[int]
+) -> float:
+    """Average finite per-class metrics using true-label subject support.
+
+    Classes absent from a split have zero support and are ignored.  Keeping
+    this separate from the macro average makes the evaluation policy explicit
+    and prevents historical macro metrics from silently changing meaning.
+    """
+    numerator = 0.0
+    denominator = 0
+    for value, support in zip(values, supports):
+        if support > 0 and math.isfinite(value):
+            numerator += float(support) * value
+            denominator += int(support)
+    return numerator / float(denominator) if denominator > 0 else math.nan
+
+
 def compute_binary_metrics(
     labels: Iterable[int | float],
     logits: Iterable[float],
@@ -110,14 +128,36 @@ def compute_binary_metrics(
     eps = 1e-12
     bce = 0.0
     brier = 0.0
+    class_bce = [0.0, 0.0]
+    class_brier = [0.0, 0.0]
+    class_count = [0, 0]
     for label, prob in zip(label_list, prob_list):
         p = min(1.0 - eps, max(eps, prob))
-        bce += -(label * math.log(p) + (1 - label) * math.log(1.0 - p))
-        brier += (prob - label) ** 2
+        sample_bce = -(label * math.log(p) + (1 - label) * math.log(1.0 - p))
+        sample_brier = (prob - label) ** 2
+        bce += sample_bce
+        brier += sample_brier
+        class_bce[label] += sample_bce
+        class_brier[label] += sample_brier
+        class_count[label] += 1
+    balanced_bce = (
+        0.5
+        * sum(class_bce[class_id] / class_count[class_id] for class_id in (0, 1))
+        if all(class_count)
+        else math.nan
+    )
+    balanced_brier = (
+        0.5
+        * sum(class_brier[class_id] / class_count[class_id] for class_id in (0, 1))
+        if all(class_count)
+        else math.nan
+    )
     metrics = {
         "n": float(n),
         "loss_bce": bce / n if n > 0 else math.nan,
         "brier": brier / n if n > 0 else math.nan,
+        "balanced_loss_bce": balanced_bce,
+        "balanced_brier": balanced_brier,
         "accuracy": _safe_div(tp + tn, n),
         "balanced_accuracy": 0.5 * (_safe_div(tp, tp + fn) + _safe_div(tn, tn + fp)),
         "precision": _safe_div(tp, tp + fp),
@@ -181,14 +221,22 @@ def compute_multiclass_metrics(
     *,
     num_classes: int,
     prefix: str = "",
+    predictions: Iterable[int] | None = None,
 ) -> dict[str, float]:
     label_list = [int(label) for label in labels]
     logit_rows = [[float(v) for v in row] for row in logits]
     if len(label_list) != len(logit_rows):
         raise ValueError("labels and logits must have the same length")
     probs = [softmax(row) for row in logit_rows]
-    preds = [max(range(num_classes), key=lambda c: prob[c]) for prob in probs]
+    preds = (
+        [int(value) for value in predictions]
+        if predictions is not None
+        else [max(range(num_classes), key=lambda c: prob[c]) for prob in probs]
+    )
+    if len(preds) != len(label_list):
+        raise ValueError("predictions and labels must have the same length")
     matrix = multiclass_confusion_matrix(label_list, preds, num_classes)
+    supports = [sum(row) for row in matrix]
     n = len(label_list)
     accuracy = sum(1 for y, pred in zip(label_list, preds) if y == pred) / n if n > 0 else math.nan
     recalls: list[float] = []
@@ -219,17 +267,31 @@ def compute_multiclass_metrics(
         "n": float(n),
         "accuracy": float(accuracy),
         "balanced_accuracy": finite_mean(recalls),
+        # This requested support-weighted form is mathematically identical to
+        # ordinary multiclass accuracy.  Emit both names so reports can state
+        # that equivalence without relabelling the historical accuracy field.
+        "weighted_balanced_accuracy": _finite_support_weighted_mean(
+            recalls, supports
+        ),
         "macro_f1": finite_mean(f1s),
         "weighted_f1": _weighted_f1_from_confusion(matrix, f1s),
         "cohen_kappa": _cohen_kappa_from_confusion(matrix),
         "macro_auroc_ovr": finite_mean(per_class_auroc),
+        "weighted_auroc_ovr": _finite_support_weighted_mean(
+            per_class_auroc, supports
+        ),
         "macro_auprc_ovr": finite_mean(per_class_auprc),
+        "weighted_auprc_ovr": _finite_support_weighted_mean(
+            per_class_auprc, supports
+        ),
         "num_skipped_auc_classes": float(len(skipped)),
     }
     for c in range(num_classes):
         metrics[f"class_{c}_auroc_ovr"] = per_class_auroc[c]
         metrics[f"class_{c}_auprc_ovr"] = per_class_auprc[c]
         metrics[f"class_{c}_f1"] = f1s[c]
+        metrics[f"class_{c}_recall"] = recalls[c]
+        metrics[f"class_{c}_support"] = float(supports[c])
     if prefix:
         return {f"{prefix}/{key}": value for key, value in metrics.items()}
     return metrics

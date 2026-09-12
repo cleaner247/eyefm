@@ -172,12 +172,39 @@ class DownstreamTrialDataset(Dataset):
 def packed_downstream_label(row: dict[str, str], cfg: dict[str, Any]) -> int:
     label_cfg = cfg.get("label", {})
     label_type = label_cfg.get("type", "binary")
+    direct_column = str(label_cfg.get("source_column", "")).strip()
+    if direct_column:
+        value = str(row.get(direct_column, "")).strip()
+        if not value:
+            raise ValueError(
+                f"Direct label column {direct_column!r} is empty for "
+                f"{row.get('global_trial_id')}"
+            )
+        try:
+            class_id = int(value)
+        except ValueError as error:
+            raise ValueError(
+                f"Direct label column {direct_column!r} must contain integer "
+                f"class ids, got {value!r} for {row.get('global_trial_id')}"
+            ) from error
+        remap = label_cfg.get("remap")
+        if remap is not None:
+            class_id = int(remap.get(str(class_id), class_id))
+        num_classes = int(label_cfg.get("num_classes", 2))
+        if class_id == -1:
+            return -1
+        if class_id < 0 or class_id >= num_classes:
+            raise ValueError(
+                f"Direct class_id out of range [0,{num_classes}): {class_id} "
+                f"for {row.get('global_trial_id')}"
+            )
+        return class_id
     health = int(row.get("health_label", ""))
     if label_type == "binary":
         if health not in {0, 1}:
             raise ValueError(f"binary health_label must be 0/1, got {health} for {row.get('global_trial_id')}")
         return health
-    if label_type == "multiclass":
+    if label_type in {"multiclass", "hierarchical_pd3"}:
         if health == 0:
             return 0
         pd_label = int(row.get("pd_disease_label", ""))
@@ -234,6 +261,27 @@ class PackedDownstreamDataset(Dataset):
             if not self.rows:
                 raise ValueError(
                     f"Packed downstream index has no trial with a usable eye: {self.index_file}"
+                )
+        # BERT positional embeddings have a fixed temporal capacity.  Apply
+        # the same exclusion rule used by code caching and BERT pretraining so
+        # downstream splits cannot create an out-of-range position index.
+        max_patches = cfg["data"].get("max_patches")
+        self.num_rows_before_length_filter = len(self.rows)
+        self.excluded_overlength_rows: list[dict[str, str]] = []
+        if max_patches is not None:
+            patch_samples = int(cfg["patch"]["samples"])
+            max_patches = int(max_patches)
+            kept_rows = []
+            for row in self.rows:
+                if int(row.get("frame_length", 0)) // patch_samples <= max_patches:
+                    kept_rows.append(row)
+                else:
+                    self.excluded_overlength_rows.append(row)
+            self.rows = kept_rows
+            if not self.rows:
+                raise ValueError(
+                    f"Packed downstream index has no trial within max_patches="
+                    f"{max_patches}: {self.index_file}"
                 )
         self.area_stats = area_stats if area_stats is not None else load_area_stats(cfg["area"]["stats_path"])
         self.store = PackedTrialStore(
@@ -299,7 +347,10 @@ def collate_downstream_trials(items: list[dict[str, Any]]) -> dict[str, Any]:
     batch = collate_trials(items)
     label_values = [item["label"] for item in items]
     label_dtype = torch.long if any(isinstance(value, int) and value not in {0, 1} for value in label_values) else torch.float32
-    if any(str(item.get("label_type", "")) == "multiclass" for item in items):
+    if any(
+        str(item.get("label_type", "")) in {"multiclass", "hierarchical_pd3"}
+        for item in items
+    ):
         label_dtype = torch.long
     batch["label"] = torch.as_tensor(label_values, dtype=label_dtype)
     batch["sample_weight"] = torch.as_tensor([item["sample_weight"] for item in items], dtype=torch.float32)

@@ -385,8 +385,17 @@ def compute_packed_area_stats(cfg: dict[str, Any], split: str = "train", out: st
                 "mad": float(eye_reference["mad"]),
                 "num_valid_frames": int(eye_reference.get("num_valid_frames", 0)),
             }
+    global_reference_count = (
+        int(global_reference.get("num_valid_frames", 0))
+        if global_reference is not None
+        else int(global_count)
+    )
     payload = {
-        "global": {"median": global_median, "mad": global_mad, "num_valid_frames": int(global_count)},
+        "global": {
+            "median": global_median,
+            "mad": global_mad,
+            "num_valid_frames": global_reference_count,
+        },
         "global_by_eye": global_by_eye,
         "subjects": {},
         "source": {
@@ -399,6 +408,9 @@ def compute_packed_area_stats(cfg: dict[str, Any], split: str = "train", out: st
             "num_trials_raw": len(raw_rows),
             "dropped_both_eyes_invalid": len(excluded_both_invalid),
             "global_reference_path": str(global_reference_path or ""),
+            "extension_num_valid_frames": (
+                int(global_count) if global_reference is not None else 0
+            ),
             "global_fallback_sampling": (
                 "equal_per_subject" if global_reference is None else "external_reference"
             ),

@@ -1,5 +1,4 @@
-# Current validation-selected reference. The active span ablation may replace
-# only the three mask fields below; all other fields remain fixed.
+# Twelve-layer reference: independent short/long masked forwards, factorized CE.
 attention:
   stim_isolated: true
   stim_attend_cls: false
@@ -31,11 +30,19 @@ area:
   clip: 5.0
   eps: 1.0e-6
 mask:
-  mode: paired_span
-  eye_masking_ratio: 0.60
+  mode: paired_dual_scale
+  eye_masking_ratio: 0.50
   span_min_patches: 1
-  span_max_patches: 5
-  span_length_distribution: uniform
+  span_max_patches: 6
+  span_length_distribution: symmetric_power
+  span_length_power: 1.0
+  dual_short_num_blocks: 15
+  dual_short_span_min_patches: 1
+  dual_short_span_max_patches: 3
+  dual_long_num_blocks: 5
+  dual_long_span_min_patches: 4
+  dual_long_span_max_patches: 6
+  dual_min_gap: 1
 loss:
   label_smoothing: 0.0
   masked_reduction: per_trial_then_global_valid_trial_mean_async
@@ -44,12 +51,13 @@ train:
   precision: bf16
   compile_model: false
   lr: 3.0e-4
-  min_lr: 3.0e-5
+  min_lr: 5.0e-5
   betas: [0.9, 0.95]
   weight_decay: 0.05
   grad_clip: 1.0
-  warmup_steps: 2000
-  total_steps: 50000
+  warmup_steps: 1000
+  total_steps: 20000
+  lr_schedule_total_steps: 20000
   log_every_steps: 100
   val_every_steps: 5000
   max_val_batches: null
@@ -63,6 +71,6 @@ train:
   code_ids_cache: outputs/eyevq/final/cache/code_ids_train_val.npz
   code_ids_cache_split: all
   max_seq_tokens_per_gpu: 262144
-  max_trials_per_gpu: 128
+  max_trials_per_gpu: 64
   num_workers: 4
   prefetch_factor: 4

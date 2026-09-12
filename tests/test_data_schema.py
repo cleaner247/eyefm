@@ -23,7 +23,7 @@ def _write_npz(path: Path, *, eye_shape=(40, 8), task_id=0, bad_label=False, bad
 
 
 def test_validate_schema_errors(tmp_path: Path) -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     for kwargs, text in [
         ({"eye_shape": (20, 7)}, "eye"),
         ({"bad_fix": True}, "fix_on"),
@@ -44,7 +44,7 @@ def test_split_txt_ignores_comments(tmp_path: Path) -> None:
 
 
 def test_nan_policy_zeroes_feature_nan_without_relabeling(tmp_path: Path) -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     cfg["data"]["nan_policy"] = "mark_missing"
     path = tmp_path / "trial.npz"
     _write_npz(path)

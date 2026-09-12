@@ -11,8 +11,6 @@ dependencies = [
   "numpy",
   "pyyaml",
   "torch",
-  "matplotlib",
-  "tensorboard",
 ]
 
 [project.optional-dependencies]

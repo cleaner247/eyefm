@@ -18,6 +18,7 @@ class EyeVQSubjectMIL(nn.Module):
         *,
         num_tasks: int = 4,
         num_classes: int = 2,
+        output_dim: int | None = None,
         classifier_hidden: int = 32,
         task_bottleneck_dim: int = 16,
         residual_hidden: int = 16,
@@ -46,7 +47,10 @@ class EyeVQSubjectMIL(nn.Module):
         self.bert = bert
         self.num_tasks = int(num_tasks)
         self.num_classes = int(num_classes)
-        self.output_dim = 1 if self.num_classes == 2 else self.num_classes
+        default_output_dim = 1 if self.num_classes == 2 else self.num_classes
+        self.output_dim = default_output_dim if output_dim is None else int(output_dim)
+        if self.output_dim <= 0:
+            raise ValueError("output_dim must be positive")
         self.task_pooling = str(task_pooling)
         self.trial_pooling = str(trial_pooling)
         self.demographic_dim = int(demographic_dim)
@@ -150,6 +154,8 @@ class EyeVQSubjectMIL(nn.Module):
         # The mask prediction head is pretraining-only.  Embeddings and the
         # lower transformer are intentionally frozen for the small MCI cohort.
         self.bert.pred_head.requires_grad_(False)
+        if self.bert.manual_feat_head is not None:
+            self.bert.manual_feat_head.requires_grad_(False)
         if self.bert.span_length_embed is not None:
             self.bert.span_length_embed.requires_grad_(False)
         if freeze_embedding:
@@ -158,6 +164,12 @@ class EyeVQSubjectMIL(nn.Module):
             self.bert.embed.mask_token.requires_grad_(False)
         for block in self.bert.transformer[: int(freeze_bottom_layers)]:
             block.requires_grad_(False)
+        # ``out_norm`` is part of the encoder representation, but it lives
+        # outside ``bert.transformer``.  A full linear probe must freeze it as
+        # well; otherwise ``freeze_bottom_layers == n_layers`` silently leaves
+        # its scale vector trainable and the experiment is not encoder-frozen.
+        if int(freeze_bottom_layers) == len(self.bert.transformer):
+            self.bert.out_norm.requires_grad_(False)
 
         hidden = int(classifier_hidden)
         if hidden <= 0:

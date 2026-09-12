@@ -80,167 +80,24 @@ from eyemae.eyevq.downstream.train_mil import (
     build_optimizer_param_groups,
     filter_subjects_below_task_minimum,
     metrics_from_subject_rows,
+    saturated_binary_checkpoint_improved,
     update_early_stopping_counter,
 )
-from eyemae.eyevq.downstream.evaluate_all_grid import make_summary_row
-from eyemae.eyevq.downstream.finalize_grid import select_best_run
 from eyemae.eyevq.pretrain.model import EyeVQBERT
 
 
-def test_subject_mil_config_uses_epoch_training_and_all_transformer_layers() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (root / "configs/eyevq/downstream_mci_subject_mil.yaml").open(
-        encoding="utf-8"
-    ) as handle:
-        cfg = yaml.safe_load(handle)
-    assert cfg["mil"]["subjects_per_gpu"] == 4
-    assert cfg["mil"]["class_sampling"] == "epoch_shuffle_no_class_quota"
-    assert "negative_per_global_step" not in cfg["mil"]
-    assert "positive_per_global_step" not in cfg["mil"]
-    assert cfg["mil"]["trials_per_task"] == 2
-    assert cfg["model"]["classifier_hidden"] == 32
-    assert cfg["mil"]["epoch_random_trial_sampling"] is True
-    assert "step_random_trial_sampling" not in cfg["mil"]
-    assert "cyclic_trial_sampling" not in cfg["mil"]
-    assert cfg["model"]["freeze_bottom_layers"] == 4
-    assert cfg["model"]["freeze_embedding"] is True
-    assert cfg["mil"]["task_pooling"] == "concat_task_cls"
-    assert cfg["train"]["epochs"] == 100
-    assert "max_steps" not in cfg["train"]
-    assert "val_every_steps" not in cfg["train"]
-    assert cfg["train"]["warmup_epochs"] == 4
-    assert cfg["train"]["layer_decay"] == 1.0
-    assert cfg["train"]["encoder_lr"] == 1e-5
-    assert cfg["train"]["head_lr"] == 1e-5
-    assert cfg["train"]["encoder_min_lr"] == 1e-6
-    assert cfg["train"]["head_min_lr"] == 1e-6
-    assert cfg["train"]["early_stopping_metric"] == "val/subject/auroc"
-    assert cfg["train"]["early_stopping_min_epochs"] == 27
-    assert cfg["train"]["early_stopping_patience_epochs"] == 10
-    assert cfg["data"]["area_stats_path"].endswith(
-        "/outputs/eyevq/mci_downstream/area_stats_bert_frozen.json"
-    )
-    assert cfg["data"]["require_any_eye_keep"] is True
 
 
-def test_cartesian_mci_config_uses_strict_k4_and_subject_level_logit_mean() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (
-        root / "configs/eyevq/downstream_mci_subject_mil_cartesian_k4_h64.yaml"
-    ).open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    assert cfg["model"]["classifier_hidden"] == 64
-    assert cfg["mil"]["trials_per_task"] == 4
-    assert cfg["mil"]["train_require_all_tasks"] is True
-    assert cfg["mil"]["task_pooling"] == "cartesian_task_cls"
-    assert cfg["mil"]["trial_pooling"] == "cartesian_logit_mean"
-    assert cfg["mil"]["eval_use_all_trials"] is True
-    assert cfg["train"]["num_trial_views"] == 1
-    assert cfg["train"]["trial_view_consistency_weight"] == 0.0
-    assert cfg["demographics"]["fusion"] == "concat_task_cls"
-    assert cfg["data"]["pretraining_overlap_policy"] == "allow_unlabeled_target_trials"
 
 
-def test_cartesian_partial_mci_config_uses_mask_cls_and_all_short_tasks() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (
-        root
-        / "configs/eyevq/downstream_mci_subject_mil_cartesian_partial_maskcls_k4_h64.yaml"
-    ).open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    assert cfg["model"]["classifier_hidden"] == 64
-    assert cfg["mil"]["trials_per_task"] == 4
-    assert cfg["mil"]["train_require_all_tasks"] is False
-    assert cfg["mil"]["sample_all_available_below_k"] is True
-    assert cfg["mil"]["missing_task_embedding"] == "learned_per_task"
-    assert cfg["mil"]["task_pooling"] == "cartesian_task_cls"
-    assert cfg["mil"]["trial_pooling"] == "cartesian_logit_mean"
-    assert cfg["mil"]["eval_use_all_trials"] is True
-    assert cfg["train"]["task_coverage_loss_weighting"] == "none"
 
 
-def test_shared_logit_residual_config_uses_partial_k4_late_fusion() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (
-        root
-        / "configs/eyevq/downstream_mci_subject_mil_shared_logit_residual_h16_partial_k4.yaml"
-    ).open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    assert cfg["model"]["classifier_hidden"] == 128
-    assert cfg["model"]["residual_hidden"] == 16
-    assert cfg["model"]["freeze_bottom_layers"] == 4
-    assert cfg["mil"]["trials_per_task"] == 4
-    assert cfg["mil"]["train_require_all_tasks"] is False
-    assert cfg["mil"]["sample_all_available_below_k"] is True
-    assert cfg["mil"]["missing_task_embedding"] == "none"
-    assert cfg["mil"]["task_pooling"] == "shared_head_residual"
-    assert cfg["mil"]["trial_pooling"] == "logit_mean"
-    assert cfg["mil"]["eval_use_all_trials"] is True
-    assert cfg["train"]["task_coverage_loss_weighting"] == "none"
-    assert cfg["demographics"]["fusion"] == "late_residual"
 
 
-def test_shared_logit_residual_strict_config_removes_partial_subjects() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (
-        root
-        / "configs/eyevq/downstream_mci_subject_mil_shared_logit_residual_h16_strict_k4.yaml"
-    ).open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    assert cfg["model"]["classifier_hidden"] == 128
-    assert cfg["model"]["residual_hidden"] == 16
-    assert cfg["mil"]["trials_per_task"] == 4
-    assert cfg["mil"]["train_require_all_tasks"] is True
-    assert cfg["mil"]["sample_all_available_below_k"] is False
-    assert cfg["mil"]["missing_task_embedding"] == "none"
-    assert cfg["mil"]["task_pooling"] == "shared_head_residual"
-    assert cfg["mil"]["trial_pooling"] == "logit_mean"
-    assert cfg["train"]["task_coverage_loss_weighting"] == "none"
-    assert cfg["demographics"]["fusion"] == "late_residual"
 
 
-def test_pd5_final_config_uses_selected_logit_mean_scheme() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (
-        root / "configs/eyevq/downstream_pd5_subject_mil_logit_mean_final.yaml"
-    ).open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    assert cfg["label"]["type"] == "multiclass"
-    assert cfg["label"]["num_classes"] == 5
-    assert cfg["model"]["freeze_bottom_layers"] == 4
-    assert cfg["model"]["freeze_embedding"] is True
-    assert cfg["model"]["classifier_hidden"] == 128
-    assert cfg["model"]["dropout"] == 0.3
-    assert cfg["mil"]["trials_per_task"] == 4
-    assert cfg["mil"]["trial_pooling"] == "logit_mean"
-    assert cfg["mil"]["task_pooling"] == "shared_head_mean"
-    assert cfg["mil"]["train_require_all_tasks"] is True
-    assert cfg["train"]["num_trial_views"] == 1
-    assert cfg["train"]["trial_view_consistency_weight"] == 0.0
-    assert cfg["train"].get("task_coverage_loss_weighting", "none") == "none"
-    assert cfg["train"]["class_weighting"] == "subject_inverse_frequency"
-    assert cfg["demographics"]["age_encoding"] == "zscore"
-    assert cfg["demographics"]["projection_dim"] == 128
 
 
-def test_pd5_residual_config_is_strict_and_omits_task_mask_inputs() -> None:
-    root = Path(__file__).resolve().parents[1]
-    with (
-        root
-        / "configs/eyevq/downstream_pd5_subject_mil_shared_logit_residual_h16_nomask_strict_k4.yaml"
-    ).open(encoding="utf-8") as handle:
-        cfg = yaml.safe_load(handle)
-    assert cfg["label"]["type"] == "multiclass"
-    assert cfg["label"]["num_classes"] == 5
-    assert cfg["model"]["classifier_hidden"] == 128
-    assert cfg["model"]["residual_hidden"] == 16
-    assert cfg["model"]["residual_include_task_mask"] is False
-    assert cfg["mil"]["trials_per_task"] == 4
-    assert cfg["mil"]["train_require_all_tasks"] is True
-    assert cfg["mil"]["sample_all_available_below_k"] is False
-    assert cfg["mil"]["task_pooling"] == "shared_head_residual"
-    assert cfg["mil"]["trial_pooling"] == "logit_mean"
-    assert cfg["demographics"]["fusion"] == "late_residual"
 
 
 def test_subject_mil_forwards_required_eye_filter_to_packed_dataset() -> None:
@@ -384,132 +241,88 @@ def test_present_fraction_coverage_weights_and_multiclass_loss() -> None:
     assert torch.all(logits.grad.abs().sum(dim=-1) > 0)
 
 
-def test_epoch100_runner_uses_eight_layers_and_runs_final_test() -> None:
-    root = Path(__file__).resolve().parents[1]
-    source = (
-        root / "scripts/run_eyevq_mci_mil_k2_8l_epoch100.sh"
-    ).read_text(encoding="utf-8")
-    assert "--freeze-bottom-layers 4" in source
-    assert "--epochs 100" in source
-    assert "--encoder-lr 1e-5" in source
-    assert "--skip-test" not in source
-    trainer_source = (
-        root / "src/eyemae/eyevq/downstream/train_mil.py"
-    ).read_text(encoding="utf-8")
-    assert 'training_stop_reason = "max_epochs"' in trainer_source
-    assert 'training_stop_reason = "early_stopping"' in trainer_source
-    assert '"test_evaluated": True' in trainer_source
-
-
-def test_k4_runner_and_serial_comparison_pipeline() -> None:
-    root = Path(__file__).resolve().parents[1]
-    k4 = (root / "scripts/run_eyevq_mci_mil_k4_8l_epoch100.sh").read_text(
-        encoding="utf-8"
+def test_hierarchical_pd3_loss_masks_subtype_for_controls() -> None:
+    logits = torch.zeros(1, 3, 2, requires_grad=True)
+    labels = torch.tensor([0, 1, 2])
+    present = torch.ones(3, 4, dtype=torch.bool)
+    loss = task_coverage_weighted_supervised_loss(
+        logits,
+        labels,
+        present,
+        label_type="hierarchical_pd3",
+        coverage_mode="none",
+        pos_weight=torch.ones(2),
+        class_weights=None,
     )
-    assert "--trials-per-task 4" in k4
-    assert "--epochs 100" in k4
-    assert "--skip-test" not in k4
-    pipeline = (root / "scripts/wait_k2_then_run_k4_compare.sh").read_text(
-        encoding="utf-8"
+    torch.testing.assert_close(loss, torch.log(torch.tensor(2.0)))
+    loss.backward()
+    assert logits.grad is not None
+    assert logits.grad[0, 0, 1].item() == 0.0
+    assert logits.grad[0, 1:, 1].abs().sum().item() > 0.0
+
+
+def test_hierarchical_pd3_loss_all_control_batch_skips_subtype() -> None:
+    logits = torch.zeros(1, 3, 2, requires_grad=True)
+    labels = torch.zeros(3, dtype=torch.long)
+    present = torch.ones(3, 4, dtype=torch.bool)
+    loss = task_coverage_weighted_supervised_loss(
+        logits,
+        labels,
+        present,
+        label_type="hierarchical_pd3",
+        coverage_mode="none",
+        pos_weight=torch.ones(2),
+        class_weights=None,
     )
-    assert 'K2_DIR/metrics_test.json' in pipeline
-    assert "run_eyevq_mci_mil_k4_8l_epoch100.sh" in pipeline
-    assert "compare_eyevq_mci_k2_k4.py" in pipeline
+    # Only the disease decision is defined for an all-control batch.
+    torch.testing.assert_close(loss, torch.log(torch.tensor(2.0)))
+    loss.backward()
+    assert logits.grad is not None
+    assert logits.grad[..., 0].abs().sum().item() > 0.0
+    assert logits.grad[..., 1].abs().sum().item() == 0.0
 
 
-def test_grid_runner_is_validation_only_and_keeps_seed_fixed() -> None:
-    root = Path(__file__).resolve().parents[1]
-    source = (root / "scripts/run_eyevq_mci_mil_grid.sh").read_text(encoding="utf-8")
-    assert "--skip-test" in source
-    assert "seed42" in source
-    assert "--seed" not in source
-    assert 'PATIENCE="${PATIENCE:-81}"' in source
-    assert "for unfrozen_layers in 6 8 10 12" in source
-    assert "for encoder_lr in 2e-6 5e-6 1e-5" in source
-
-
-def test_120_epoch_layer_runner_has_fixed_lr_and_skips_test() -> None:
-    root = Path(__file__).resolve().parents[1]
-    source = (
-        root / "scripts/run_eyevq_mci_mil_layers_lr1e5_e120.sh"
-    ).read_text(encoding="utf-8")
-    assert 'ENCODER_LR="1e-5"' in source
-    assert 'EPOCHS="120"' in source
-    assert 'PATIENCE="121"' in source
-    assert "for unfrozen_layers in 6 8 10 12" in source
-    assert "--skip-test" in source
-    assert "--seed" not in source
-
-
-def test_grid_finalizer_selects_only_highest_validation_auroc(tmp_path: Path) -> None:
-    paths = []
-    for index, auroc in enumerate((0.81, 0.90, 0.86, 0.84)):
-        path = tmp_path / f"run{index}.json"
-        path.write_text(json.dumps({
-            "best_val_auroc": auroc,
-            "best_epoch": 10 + index,
-        }), encoding="utf-8")
-        paths.append(path)
-    best_path, best_result = select_best_run(paths)
-    assert best_path.name == "run1.json"
-    assert best_result["best_val_auroc"] == 0.90
-
-
-def test_all_test_finalizer_evaluates_five_runs_without_test_selection() -> None:
-    root = Path(__file__).resolve().parents[1]
-    source = (
-        root / "scripts/finalize_eyevq_mci_mil_e120.sh"
-    ).read_text(encoding="utf-8")
-    assert "eyemae.eyevq.downstream.evaluate_all_grid" in source
-    assert "--expected-runs 5" in source
-    module_source = (
-        root / "src/eyemae/eyevq/downstream/evaluate_all_grid.py"
-    ).read_text(encoding="utf-8")
-    assert '"test_evaluated_for_all_runs": True' in module_source
-    assert '"test_results_used_for_selection": False' in module_source
-
-
-def test_all_test_summary_marks_full_finetune() -> None:
-    validation = {
-        "best_epoch": 71,
-        "best_val_auroc": 0.91,
-        "cfg": {
-            "model": {"freeze_bottom_layers": 0, "freeze_embedding": False},
-            "train": {"encoder_lr": 1e-5, "head_lr": 5e-5},
-        },
-    }
-    test_result = {
-        "tuned_threshold": 0.43,
-        "test_tuned": {
-            "test/subject/auroc": 0.88,
-            "test/subject/balanced_accuracy": 0.81,
-            "test/subject/f1": 0.79,
-            "test/subject/accuracy": 0.82,
-        },
-        "test_default_05": {
-            "test/subject/balanced_accuracy": 0.78,
-            "test/subject/f1": 0.75,
-            "test/subject/accuracy": 0.80,
-        },
-    }
-    row = make_summary_row(
-        Path("full_finetune/metrics_val_best.json"), validation, test_result
+def test_hierarchical_pd3_loss_supports_head_frequency_weighting() -> None:
+    logits = torch.zeros(1, 3, 2, requires_grad=True)
+    logits.data[0, :, 1] = 2.0
+    labels = torch.tensor([0, 1, 2])
+    present = torch.ones(3, 4, dtype=torch.bool)
+    head_weights = torch.tensor([0.25, 0.75])
+    loss = task_coverage_weighted_supervised_loss(
+        logits,
+        labels,
+        present,
+        label_type="hierarchical_pd3",
+        coverage_mode="none",
+        pos_weight=torch.ones(2),
+        class_weights=None,
+        hierarchical_head_weights=head_weights,
     )
-    assert row["full_finetune"] is True
-    assert row["embedding_unfrozen"] is True
-    assert row["test_auroc"] == 0.88
+    disease_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits[0, :, 0], (labels > 0).float()
+    )
+    subtype_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+        logits[0, 1:, 1], (labels[1:] == 2).float()
+    )
+    torch.testing.assert_close(
+        loss, head_weights[0] * disease_loss + head_weights[1] * subtype_loss
+    )
 
 
-def test_full_finetune_runner_unfreezes_embedding_and_skips_test() -> None:
-    root = Path(__file__).resolve().parents[1]
-    source = (
-        root / "scripts/run_eyevq_mci_mil_full_finetune_e120.sh"
-    ).read_text(encoding="utf-8")
-    assert "--freeze-bottom-layers 0" in source
-    assert "--unfreeze-embedding" in source
-    assert "--encoder-lr 1e-5" in source
-    assert "--epochs 120" in source
-    assert "--skip-test" in source
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 class _FakeTrialDataset:
@@ -734,6 +547,36 @@ def test_layerwise_optimizer_groups_exclude_norm_and_bias_from_decay() -> None:
     assert grouped["subject_head.1.weight"]["weight_decay"] == 0.05
 
 
+def test_full_encoder_freeze_includes_output_norm() -> None:
+    model = _tiny_mil(
+        freeze_bottom_layers=2,
+        task_pooling="shared_head_mean",
+        trial_pooling="logit_mean",
+        classifier_head="linear",
+        num_classes=3,
+    )
+    trainable = {
+        name for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    }
+    assert not any(name.startswith("bert.") for name in trainable)
+    assert trainable == {
+        "task_head.0.weight",
+        "task_head.0.bias",
+        "task_head.1.weight",
+        "task_head.1.bias",
+    }
+    groups = build_optimizer_param_groups(
+        model,
+        encoder_lr=1e-5,
+        head_lr=1e-3,
+        layer_decay=1.0,
+        weight_decay=0.05,
+    )
+    assert groups
+    assert {group["schedule"] for group in groups} == {"head"}
+
+
 def test_demographic_branch_is_a_head_optimizer_group() -> None:
     model = _tiny_mil(freeze_bottom_layers=0, demographic_dim=16)
     groups = build_optimizer_param_groups(
@@ -854,6 +697,28 @@ def test_early_stopping_new_best_resets_patience_counter() -> None:
         global_step=380,
         min_steps=400,
     ) == 4
+
+
+def test_saturated_binary_checkpoint_prefers_balanced_calibration() -> None:
+    selected = {
+        "auroc": 1.0,
+        "auprc": 1.0,
+        "balanced_loss_bce": 0.20,
+        "balanced_brier": 0.06,
+        "positives": 11.0,
+        "negatives": 16.0,
+    }
+    candidate = {
+        "auroc": 1.0 - 1.0 / (11.0 * 16.0),
+        "auprc": 0.992,
+        "balanced_loss_bce": 0.12,
+        "balanced_brier": 0.04,
+        "positives": 11.0,
+        "negatives": 16.0,
+    }
+    assert saturated_binary_checkpoint_improved(candidate, selected)
+    candidate["auprc"] = 0.98
+    assert not saturated_binary_checkpoint_improved(candidate, selected)
 
 
 def test_split_audit_always_checks_subject_and_trial_identity() -> None:
@@ -1446,6 +1311,54 @@ def test_multiclass_subject_rows_use_macro_ovr_metrics() -> None:
     )
     assert metrics["val/subject/macro_auroc_ovr"] == 1.0
     assert metrics["val/subject/balanced_accuracy"] == 1.0
+
+
+def test_multiclass_subject_rows_emit_support_weighted_metrics() -> None:
+    rows = []
+    labels = [0, 0, 0, 1, 2, 3, 4]
+    predictions = [0, 0, 1, 1, 2, 0, 4]
+    for label, prediction in zip(labels, predictions):
+        logits = [-1.0] * 5
+        logits[prediction] = 2.0
+        row = {"label": label}
+        row.update(
+            {f"logit_{class_id}": value for class_id, value in enumerate(logits)}
+        )
+        rows.append(row)
+    metrics = metrics_from_subject_rows(rows, split_name="val", num_classes=5)
+    supports = [3, 1, 1, 1, 1]
+    expected_auc = sum(
+        support * metrics[f"val/subject/class_{class_id}_auroc_ovr"]
+        for class_id, support in enumerate(supports)
+    ) / sum(supports)
+    assert metrics["val/subject/weighted_auroc_ovr"] == pytest.approx(
+        expected_auc
+    )
+    assert metrics["val/subject/weighted_balanced_accuracy"] == pytest.approx(
+        metrics["val/subject/accuracy"]
+    )
+    for class_id, support in enumerate(supports):
+        assert metrics[f"val/subject/class_{class_id}_support"] == support
+
+
+def test_hierarchical_pd3_rows_use_two_sigmoid_decisions() -> None:
+    rows = [
+        {"label": 0, "pred": 0, "disease_logit": -3.0, "subtype_logit": 2.0,
+         "prob_0": 0.95, "prob_1": 0.01, "prob_2": 0.04},
+        {"label": 1, "pred": 1, "disease_logit": 3.0, "subtype_logit": -2.0,
+         "prob_0": 0.05, "prob_1": 0.85, "prob_2": 0.10},
+        {"label": 2, "pred": 2, "disease_logit": 3.0, "subtype_logit": 2.0,
+         "prob_0": 0.05, "prob_1": 0.10, "prob_2": 0.85},
+    ]
+    metrics = metrics_from_subject_rows(
+        rows,
+        split_name="val",
+        num_classes=3,
+        label_type="hierarchical_pd3",
+    )
+    assert metrics["val/subject/balanced_accuracy"] == 1.0
+    assert metrics["val/subject/disease/balanced_accuracy"] == 1.0
+    assert metrics["val/subject/subtype_tremor/balanced_accuracy"] == 1.0
 
 
 def test_demographic_additive_logit_backpropagates_to_eye_and_metadata() -> None:

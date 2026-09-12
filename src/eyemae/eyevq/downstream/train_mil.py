@@ -60,7 +60,7 @@ from eyemae.eyevq.downstream.demographics import (
 from eyemae.eyevq.downstream.mil_model import EyeVQSubjectMIL
 from eyemae.eyevq.downstream.mil_sampler import DistributedSubjectEpochSampler
 from eyemae.eyevq.downstream.split_audit import audit_split_rows, assert_clean_splits
-from eyemae.eyevq.downstream.train import (
+from eyemae.eyevq.downstream.runtime import (
     get_encoder_head_lrs,
     register_cleanup,
     setup_distributed,
@@ -152,6 +152,8 @@ def task_coverage_weights(
 def ddp_global_weighted_mean(
     values: torch.Tensor,
     weights: torch.Tensor,
+    *,
+    empty_fallback: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute a DDP-correct weighted mean without reducing autograd tensors.
 
@@ -169,6 +171,8 @@ def ddp_global_weighted_mean(
         dist.all_reduce(global_denominator, op=dist.ReduceOp.SUM)
         world_size = dist.get_world_size()
     if float(global_denominator.item()) <= 0:
+        if empty_fallback is not None:
+            return empty_fallback
         raise ValueError("Weighted loss denominator must be positive")
     return (values * weights).sum() * (
         float(world_size) / global_denominator
@@ -184,6 +188,7 @@ def task_coverage_weighted_supervised_loss(
     coverage_mode: str,
     pos_weight: torch.Tensor | None,
     class_weights: torch.Tensor | None,
+    hierarchical_head_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Apply class and task-coverage weights once per subject."""
     if view_logits.shape[1] != labels.shape[0]:
@@ -210,8 +215,50 @@ def task_coverage_weighted_supervised_loss(
         effective_weights = coverage.to(per_subject.dtype) * class_weights.index_select(
             0, labels
         ).to(per_subject.dtype)
+    elif label_type == "hierarchical_pd3":
+        if view_logits.ndim != 3 or view_logits.shape[-1] != 2:
+            raise ValueError("Hierarchical PD3 logits must have shape [V,B,2]")
+        if pos_weight is None or pos_weight.numel() != 2:
+            raise ValueError("Hierarchical PD3 requires disease/subtype pos weights")
+        disease_targets = (labels > 0).to(view_logits.dtype)
+        subtype_targets = (labels == 2).to(view_logits.dtype)
+        diseased = labels > 0
+        disease_values = F.binary_cross_entropy_with_logits(
+            view_logits[..., 0],
+            disease_targets.unsqueeze(0).expand_as(view_logits[..., 0]),
+            pos_weight=pos_weight[0],
+            reduction="none",
+        ).mean(dim=0)
+        subtype_values = F.binary_cross_entropy_with_logits(
+            view_logits[..., 1],
+            subtype_targets.unsqueeze(0).expand_as(view_logits[..., 1]),
+            pos_weight=pos_weight[1],
+            reduction="none",
+        ).mean(dim=0)
+        coverage = coverage.to(disease_values.dtype)
+        disease_loss = ddp_global_weighted_mean(disease_values, coverage)
+        subtype_loss = ddp_global_weighted_mean(
+            subtype_values[diseased],
+            coverage[diseased],
+            # A shuffled global batch can contain controls only. In that case
+            # there is no defined subtype target, so average over the one
+            # available hierarchy branch instead of failing or halving the
+            # disease loss: 0.5 * (disease + disease) == disease.
+            empty_fallback=disease_loss,
+        )
+        if hierarchical_head_weights is None:
+            head_weights = disease_loss.new_tensor([0.5, 0.5])
+        else:
+            if hierarchical_head_weights.numel() != 2:
+                raise ValueError(
+                    "Hierarchical PD3 head weights must contain disease/subtype"
+                )
+            head_weights = hierarchical_head_weights.to(
+                device=disease_loss.device, dtype=disease_loss.dtype
+            )
+        return head_weights[0] * disease_loss + head_weights[1] * subtype_loss
     else:
-        raise ValueError("label_type must be binary or multiclass")
+        raise ValueError("label_type must be binary, multiclass, or hierarchical_pd3")
     return ddp_global_weighted_mean(per_subject, effective_weights)
 
 
@@ -253,8 +300,10 @@ def masked_auxiliary_task_loss(
         weights = present.to(values.dtype) * class_weights.index_select(
             0, labels
         ).view(1, -1, 1).to(values.dtype)
+    elif label_type == "hierarchical_pd3":
+        raise ValueError("Hierarchical PD3 does not support auxiliary task loss")
     else:
-        raise ValueError("label_type must be binary or multiclass")
+        raise ValueError("label_type must be binary, multiclass, or hierarchical_pd3")
     return ddp_global_weighted_mean(values, weights)
 
 
@@ -278,6 +327,11 @@ def _downstream_cfg(
             ),
             "max_open_shards_per_worker": int(data_cfg.get("max_open_shards_per_worker", 44)),
             "validate_offsets": bool(data_cfg.get("validate_offsets", False)),
+            "max_patches": int(
+                bert_cfg.get("bert", {}).get(
+                    "max_patches", bert_cfg.get("bert", {}).get("max_time", 256)
+                )
+            ),
         },
         "patch": dict(bert_cfg["patch"]),
         "area": {
@@ -310,18 +364,26 @@ def validate_mci_area_stats(
     bert_area_stats_path: str | Path | None = None,
 ) -> None:
     """Require normalization that exactly matches the BERT training regime."""
-    if mode == "per_subject_transductive":
+    if mode in {"per_subject_transductive", "per_subject_unlabeled_extension"}:
         problems = []
         subjects = area_stats.get("subjects", {})
         if not subjects:
             problems.append("per-subject mode requires non-empty subject statistics")
         if area_stats_path is None or bert_area_stats_path is None:
             problems.append("per-subject mode requires both downstream and BERT stats paths")
-        elif Path(area_stats_path).resolve() != Path(bert_area_stats_path).resolve():
+        elif (
+            mode == "per_subject_transductive"
+            and Path(area_stats_path).resolve() != Path(bert_area_stats_path).resolve()
+        ):
             problems.append("downstream area-stat path does not match the BERT checkpoint")
         source = area_stats.get("source", {})
-        if source.get("scope") != "all_pretraining_subjects_unlabeled":
-            problems.append("source.scope must be all_pretraining_subjects_unlabeled")
+        expected_scope = (
+            "all_pretraining_subjects_unlabeled"
+            if mode == "per_subject_transductive"
+            else "downstream_depression_all_subjects_unlabeled_extension"
+        )
+        if source.get("scope") != expected_scope:
+            problems.append(f"source.scope must be {expected_scope}")
         if source.get("normalization_scope") != "per_subject_eye_median_mad":
             problems.append("source.normalization_scope must be per_subject_eye_median_mad")
         normalization = source.get("normalization", {})
@@ -337,6 +399,45 @@ def validate_mci_area_stats(
             problems.append("source.normalization.mad_to_sigma must be 1.4826")
         if source.get("invalid_eye_policy") != "trial_final_keep_then_frame_qc":
             problems.append("source.invalid_eye_policy must enforce trial final_keep")
+        if mode == "per_subject_unlabeled_extension" and bert_area_stats_path is not None:
+            reference_path = Path(
+                str(source.get("global_reference_path", ""))
+            ).resolve()
+            expected_reference = Path(bert_area_stats_path).resolve()
+            if reference_path != expected_reference:
+                problems.append(
+                    "source.global_reference_path must match the BERT area-stat path"
+                )
+            elif not reference_path.is_file():
+                problems.append("BERT area-stat reference does not exist")
+            else:
+                reference = load_area_stats(reference_path)
+                for scope, names in (
+                    ("global", ("median", "mad")),
+                    ("left", ("median", "mad")),
+                    ("right", ("median", "mad")),
+                ):
+                    observed = (
+                        area_stats.get("global", {})
+                        if scope == "global"
+                        else area_stats.get("global_by_eye", {}).get(scope, {})
+                    )
+                    expected = (
+                        reference.get("global", {})
+                        if scope == "global"
+                        else reference.get("global_by_eye", {}).get(scope, {})
+                    )
+                    for name in names:
+                        observed_value = float(observed.get(name, math.nan))
+                        expected_value = float(expected.get(name, math.nan))
+                        if (
+                            not math.isfinite(observed_value)
+                            or not math.isfinite(expected_value)
+                            or abs(observed_value - expected_value) > 1e-9
+                        ):
+                            problems.append(
+                                f"extended {scope}.{name} differs from BERT reference"
+                            )
         if problems:
             raise ValueError("Invalid per-subject MCI area statistics: " + "; ".join(problems))
         return
@@ -621,6 +722,7 @@ def metrics_from_subject_rows(
     split_name: str,
     threshold: float = 0.5,
     num_classes: int = 2,
+    label_type: str | None = None,
 ) -> dict[str, float]:
     """Recompute subject metrics without another BERT evaluation."""
     labels = [int(row["label"]) for row in rows]
@@ -629,6 +731,36 @@ def metrics_from_subject_rows(
         return compute_binary_metrics(
             labels, logits, threshold=threshold, prefix=f"{split_name}/subject"
         )
+    if label_type == "hierarchical_pd3":
+        probabilities = [
+            [float(row[f"prob_{class_id}"]) for class_id in range(3)]
+            for row in rows
+        ]
+        log_probabilities = [
+            [math.log(max(probability, 1e-12)) for probability in values]
+            for values in probabilities
+        ]
+        metrics = compute_multiclass_metrics(
+            labels,
+            log_probabilities,
+            num_classes=3,
+            prefix=f"{split_name}/subject",
+            predictions=[int(row["pred"]) for row in rows],
+        )
+        metrics.update(compute_binary_metrics(
+            [int(label > 0) for label in labels],
+            [float(row["disease_logit"]) for row in rows],
+            threshold=threshold,
+            prefix=f"{split_name}/subject/disease",
+        ))
+        diseased_rows = [row for row in rows if int(row["label"]) > 0]
+        metrics.update(compute_binary_metrics(
+            [int(row["label"]) == 2 for row in diseased_rows],
+            [float(row["subtype_logit"]) for row in diseased_rows],
+            threshold=threshold,
+            prefix=f"{split_name}/subject/subtype_tremor",
+        ))
+        return metrics
     logits = [
         [float(row[f"logit_{class_id}"]) for class_id in range(num_classes)]
         for row in rows
@@ -706,6 +838,7 @@ def evaluate_subjects(
     if not subject_keys:
         raise ValueError(f"No subjects were encoded for split={split_name}")
     present = torch.zeros(len(subject_keys), len(TASK_IDS), dtype=torch.bool)
+    label_type = str(getattr(model, "label_type", "binary" if model.num_classes == 2 else "multiclass"))
     labels = torch.tensor(
         [subjects[key]["label"] for key in subject_keys],
         dtype=torch.float32 if model.num_classes == 2 else torch.long,
@@ -880,9 +1013,34 @@ def evaluate_subjects(
             row["cartesian_combination_count"] = int(
                 combination_counts[index].item()
             )
-        if model.num_classes == 2:
+        if label_type == "binary":
             row["logit"] = float(subject_logits[index].item())
             row["prob"] = sigmoid(float(subject_logits[index].item()))
+        elif label_type == "hierarchical_pd3":
+            disease_logit = float(subject_logits[index, 0].item())
+            subtype_logit = float(subject_logits[index, 1].item())
+            disease_probability = sigmoid(disease_logit)
+            subtype_probability = sigmoid(subtype_logit)
+            probabilities = (
+                1.0 - disease_probability,
+                disease_probability * (1.0 - subtype_probability),
+                disease_probability * subtype_probability,
+            )
+            row.update({
+                "disease_logit": disease_logit,
+                "disease_prob": disease_probability,
+                "subtype_logit": subtype_logit,
+                "subtype_tremor_prob": subtype_probability,
+                "pred": (
+                    0 if disease_probability < threshold
+                    else (2 if subtype_probability >= threshold else 1)
+                ),
+            })
+            for class_id, probability in enumerate(probabilities):
+                row[f"prob_{class_id}"] = float(probability)
+        elif label_type == "hierarchical_pd3":
+            threshold = 0.5
+            val_bacc = float(val_metrics["val/subject/balanced_accuracy"])
         else:
             logits = [
                 float(subject_logits[index, class_id].item())
@@ -898,14 +1056,19 @@ def evaluate_subjects(
         for task_id, task_name in enumerate(TASK_NAMES):
             row[f"{task_name}_count"] = int(entry["task_counts"][task_id])
             if task_logits is not None and task_weights is not None:
-                if model.num_classes == 2:
+                if label_type == "binary":
                     row[f"{task_name}_logit"] = float(
                         task_logits[index, task_id].item()
                     )
                 else:
-                    for class_id in range(model.num_classes):
-                        row[f"{task_name}_logit_{class_id}"] = float(
-                            task_logits[index, task_id, class_id].item()
+                    logit_names = (
+                        ("disease", "subtype")
+                        if label_type == "hierarchical_pd3"
+                        else tuple(str(class_id) for class_id in range(model.num_classes))
+                    )
+                    for logit_index, logit_name in enumerate(logit_names):
+                        row[f"{task_name}_logit_{logit_name}"] = float(
+                            task_logits[index, task_id, logit_index].item()
                         )
                 row[f"{task_name}_weight"] = float(task_weights[index, task_id].item())
         if eye_subject_logits is not None and demographic_logits is not None:
@@ -955,14 +1118,23 @@ def evaluate_subjects(
         split_name=split_name,
         threshold=threshold,
         num_classes=model.num_classes,
+        label_type=label_type,
     )
-    per_subject_loss = (
-        F.binary_cross_entropy_with_logits(
+    if label_type == "binary":
+        per_subject_loss = F.binary_cross_entropy_with_logits(
             subject_logits, labels, reduction="none"
         )
-        if model.num_classes == 2
-        else F.cross_entropy(subject_logits, labels, reduction="none")
-    )
+    elif label_type == "hierarchical_pd3":
+        disease_loss = F.binary_cross_entropy_with_logits(
+            subject_logits[:, 0], (labels > 0).float(), reduction="none"
+        )
+        diseased = labels > 0
+        subtype_loss = F.binary_cross_entropy_with_logits(
+            subject_logits[diseased, 1], (labels[diseased] == 2).float(), reduction="mean"
+        )
+        per_subject_loss = 0.5 * (disease_loss + subtype_loss)
+    else:
+        per_subject_loss = F.cross_entropy(subject_logits, labels, reduction="none")
     coverage = task_coverage_weights(
         present, mode=task_coverage_loss_weighting
     ).cpu()
@@ -1076,6 +1248,61 @@ def update_early_stopping_counter(
     if global_step < min_steps:
         return int(no_improve)
     return 0 if val_improved else int(no_improve) + 1
+
+
+def saturated_binary_checkpoint_improved(
+    candidate: dict[str, float],
+    selected: dict[str, float] | None,
+    *,
+    max_pair_errors: int = 1,
+    min_auprc: float = 0.99,
+) -> bool:
+    """Select a calibrated checkpoint once binary ranking has saturated."""
+    if max_pair_errors < 0:
+        raise ValueError("max_pair_errors must be non-negative")
+    if not 0.0 <= min_auprc <= 1.0:
+        raise ValueError("min_auprc must be in [0, 1]")
+
+    def eligible(value: dict[str, float]) -> bool:
+        positives = int(round(value["positives"]))
+        negatives = int(round(value["negatives"]))
+        if positives <= 0 or negatives <= 0:
+            return False
+        auc_floor = 1.0 - max_pair_errors / float(positives * negatives)
+        return (
+            value["auroc"] >= auc_floor - 1e-12
+            and value["auprc"] >= min_auprc - 1e-12
+        )
+
+    if selected is None:
+        return True
+    candidate_eligible = eligible(candidate)
+    selected_eligible = eligible(selected)
+    if candidate_eligible != selected_eligible:
+        return candidate_eligible
+    if candidate_eligible:
+        return (
+            candidate["balanced_loss_bce"],
+            candidate["balanced_brier"],
+            -candidate["auroc"],
+            -candidate["auprc"],
+        ) < (
+            selected["balanced_loss_bce"],
+            selected["balanced_brier"],
+            -selected["auroc"],
+            -selected["auprc"],
+        )
+    return (
+        candidate["auroc"],
+        candidate["auprc"],
+        -candidate["balanced_loss_bce"],
+        -candidate["balanced_brier"],
+    ) > (
+        selected["auroc"],
+        selected["auprc"],
+        -selected["balanced_loss_bce"],
+        -selected["balanced_brier"],
+    )
 
 
 def main() -> None:
@@ -1209,13 +1436,71 @@ def main() -> None:
     if label_type == "binary":
         if num_classes != 2:
             raise ValueError("Binary Subject-MIL requires label.num_classes=2")
-        selection_metric_name = "auroc"
+        default_selection_metric = "auroc"
+        allowed_selection_metrics = {"auroc"}
     elif label_type == "multiclass":
         if num_classes < 3:
             raise ValueError("Multiclass Subject-MIL requires at least 3 classes")
-        selection_metric_name = "macro_auroc_ovr"
+        default_selection_metric = "macro_auroc_ovr"
+        allowed_selection_metrics = {
+            "balanced_accuracy",
+            "macro_auroc_ovr",
+            "weighted_auroc_ovr",
+        }
+    elif label_type == "hierarchical_pd3":
+        if num_classes != 3:
+            raise ValueError("Hierarchical PD3 requires label.num_classes=3")
+        default_selection_metric = "balanced_accuracy"
+        allowed_selection_metrics = {
+            "balanced_accuracy",
+            "cohen_kappa",
+            "macro_auprc_ovr",
+            "macro_auroc_ovr",
+        }
     else:
-        raise ValueError("label.type must be binary or multiclass")
+        raise ValueError("label.type must be binary, multiclass, or hierarchical_pd3")
+    declared_selection_metric = train_cfg.get("selection_metric")
+    if declared_selection_metric is None:
+        declared_selection_metric = train_cfg.get("early_stopping_metric")
+    if declared_selection_metric is None:
+        selection_metric_name = default_selection_metric
+    else:
+        selection_metric_name = str(declared_selection_metric).split("/")[-1]
+    if selection_metric_name not in allowed_selection_metrics:
+        raise ValueError(
+            f"Unsupported {label_type} selection metric "
+            f"{selection_metric_name!r}; expected one of "
+            f"{sorted(allowed_selection_metrics)}"
+        )
+    checkpoint_selection_rule = str(
+        train_cfg.get("checkpoint_selection_rule", "primary_metric")
+    )
+    if checkpoint_selection_rule not in {
+        "primary_metric",
+        "saturated_binary_balanced_bce",
+    }:
+        raise ValueError(
+            "train.checkpoint_selection_rule must be primary_metric or "
+            "saturated_binary_balanced_bce"
+        )
+    if (
+        checkpoint_selection_rule == "saturated_binary_balanced_bce"
+        and label_type != "binary"
+    ):
+        raise ValueError(
+            "saturated_binary_balanced_bce checkpoint selection requires a binary task"
+        )
+    checkpoint_max_pair_errors = int(
+        train_cfg.get("checkpoint_selection_max_pair_errors", 1)
+    )
+    checkpoint_min_auprc = float(
+        train_cfg.get("checkpoint_selection_min_auprc", 0.99)
+    )
+    balanced_metric_name = (
+        "weighted_balanced_accuracy"
+        if selection_metric_name == "weighted_auroc_ovr"
+        else "balanced_accuracy"
+    )
     demographics_cfg = cfg.setdefault("demographics", {})
     demographics_enabled = bool(demographics_cfg.get("enabled", False))
     demographic_fusion = str(
@@ -1232,6 +1517,9 @@ def main() -> None:
     set_seed(seed + rank)
 
     subjects_per_gpu = int(mil_cfg["subjects_per_gpu"])
+    gradient_accumulation_steps = int(
+        train_cfg.get("gradient_accumulation_steps", 1)
+    )
     trials_per_task = int(mil_cfg["trials_per_task"])
     eligibility_min_trials = int(
         mil_cfg.get("eligibility_min_trials_per_task", trials_per_task)
@@ -1256,14 +1544,21 @@ def main() -> None:
     missing_task_embedding = str(
         mil_cfg.get("missing_task_embedding", "none")
     )
+    if label_type == "hierarchical_pd3" and auxiliary_task_loss_weight != 0:
+        raise ValueError("Hierarchical PD3 requires auxiliary_task_loss_weight=0")
     residual_include_task_mask = bool(
         model_cfg.get("residual_include_task_mask", True)
     )
     task_coverage_loss_weighting = str(
         train_cfg.get("task_coverage_loss_weighting", "none")
     )
+    hierarchical_head_weighting = str(
+        train_cfg.get("hierarchical_head_weighting", "equal")
+    )
     if subjects_per_gpu <= 0:
         raise ValueError("mil.subjects_per_gpu must be positive")
+    if gradient_accumulation_steps <= 0:
+        raise ValueError("train.gradient_accumulation_steps must be positive")
     if eligibility_min_trials < trials_per_task:
         raise ValueError(
             "mil.eligibility_min_trials_per_task cannot be smaller than trials_per_task"
@@ -1416,6 +1711,7 @@ def main() -> None:
         bert,
         num_tasks=len(TASK_IDS),
         num_classes=num_classes,
+        output_dim=2 if label_type == "hierarchical_pd3" else None,
         classifier_hidden=int(model_cfg.get("classifier_hidden", 32)),
         task_bottleneck_dim=int(model_cfg.get("task_bottleneck_dim", 16)),
         residual_hidden=int(model_cfg.get("residual_hidden", 16)),
@@ -1440,6 +1736,7 @@ def main() -> None:
         cartesian_trials_per_task=trials_per_task,
         missing_task_embedding=missing_task_embedding,
     ).to(device)
+    model.label_type = label_type
 
     downstream_cfg = _downstream_cfg(data_cfg, bert_cfg, label_cfg)
     area_stats_path = Path(data_cfg["area_stats_path"])
@@ -1510,6 +1807,9 @@ def main() -> None:
             row
             for row in read_packed_index(data_dir / data_cfg["test_index"])
             if packed_row_has_usable_eye(row)
+            and int(row.get("frame_length", 0))
+            // int(downstream_cfg["patch"]["samples"])
+            <= int(downstream_cfg["data"]["max_patches"])
         ]
         audit_dataset = SimpleNamespace(
             rows=test_audit_rows,
@@ -1529,7 +1829,9 @@ def main() -> None:
         "test": test_audit_rows,
     })
     assert_clean_splits(split_audit)
-    if area_stats_mode == "per_subject_transductive":
+    if area_stats_mode in {
+        "per_subject_transductive", "per_subject_unlabeled_extension"
+    }:
         stats_subjects = set(area_stats.get("subjects", {}))
         required_subjects = {
             str(row["ml_subject_id"])
@@ -1619,8 +1921,64 @@ def main() -> None:
         pos_weight = torch.tensor(
             positive_class_weight, device=device, dtype=torch.float32
         )
+        hierarchical_head_weights_values = None
+        hierarchical_head_weights = None
+        class_weights = None
+    elif label_type == "hierarchical_pd3":
+        if class_weighting not in {"subject_inverse_frequency", "none"}:
+            raise ValueError(
+                "Hierarchical PD3 class weighting must be none or "
+                "subject_inverse_frequency"
+            )
+        n_control = train_label_counts[0]
+        n_parkinson = train_label_counts[1]
+        n_tremor = train_label_counts[2]
+        disease_pos_weight = (
+            float(n_control) / float(n_parkinson + n_tremor)
+            if class_weighting == "subject_inverse_frequency" else 1.0
+        )
+        subtype_pos_weight = (
+            float(n_parkinson) / float(n_tremor)
+            if class_weighting == "subject_inverse_frequency" else 1.0
+        )
+        positive_class_weight = {
+            "disease": disease_pos_weight,
+            "subtype_tremor": subtype_pos_weight,
+        }
+        pos_weight = torch.tensor(
+            [disease_pos_weight, subtype_pos_weight],
+            device=device,
+            dtype=torch.float32,
+        )
+        n_disease_supervision = n_control + n_parkinson + n_tremor
+        n_subtype_supervision = n_parkinson + n_tremor
+        if hierarchical_head_weighting == "equal":
+            hierarchical_head_weights_values = [0.5, 0.5]
+        elif hierarchical_head_weighting == "inverse_supervision_frequency":
+            # Normalize inverse supervision counts so the overall objective
+            # scale remains stable while emphasizing the less-observed
+            # Parkinson-vs-tremor branch.
+            inverse_disease = 1.0 / float(n_disease_supervision)
+            inverse_subtype = 1.0 / float(n_subtype_supervision)
+            inverse_sum = inverse_disease + inverse_subtype
+            hierarchical_head_weights_values = [
+                inverse_disease / inverse_sum,
+                inverse_subtype / inverse_sum,
+            ]
+        else:
+            raise ValueError(
+                "Hierarchical PD3 train.hierarchical_head_weighting must be "
+                "equal or inverse_supervision_frequency"
+            )
+        hierarchical_head_weights = torch.tensor(
+            hierarchical_head_weights_values,
+            device=device,
+            dtype=torch.float32,
+        )
         class_weights = None
     else:
+        hierarchical_head_weights_values = None
+        hierarchical_head_weights = None
         positive_class_weight = None
         if class_weighting == "subject_inverse_frequency":
             total_subjects = len(train_bags)
@@ -1679,6 +2037,8 @@ def main() -> None:
                 "1": float(positive_class_weight),
             }
             if label_type == "binary"
+            else positive_class_weight
+            if label_type == "hierarchical_pd3"
             else {
                 str(class_id): float(class_weights[class_id].item())
                 for class_id in range(num_classes)
@@ -1710,21 +2070,29 @@ def main() -> None:
             len(val_trials), len(test_audit_rows), test_trials is not None,
         )
         logger.info(
-            "Per GPU: %d subjects x %d tasks x %d fixed slots = %d encoded slots "
-            "| global subjects=%d",
+            "Per GPU micro-batch: %d subjects x %d tasks x %d fixed slots = %d "
+            "encoded slots | grad_accum=%d effective subjects/update=%d",
             subjects_per_gpu,
             len(TASK_IDS),
             trials_per_task,
             subjects_per_gpu * len(TASK_IDS) * trials_per_task,
-            subjects_per_gpu * world_size,
+            gradient_accumulation_steps,
+            subjects_per_gpu * world_size * gradient_accumulation_steps,
         )
         logger.info("First-epoch audit: %s", first_audit)
         logger.info(
             "Subject %s class weighting: %s weights=%s",
-            "BCE" if label_type == "binary" else "CE",
+            "BCE" if label_type in {"binary", "hierarchical_pd3"} else "CE",
             class_weighting,
             class_weights_json,
         )
+        if label_type == "hierarchical_pd3":
+            logger.info(
+                "Hierarchical head weighting: %s disease=%.6f subtype=%.6f",
+                hierarchical_head_weighting,
+                hierarchical_head_weights_values[0],
+                hierarchical_head_weights_values[1],
+            )
         write_json(output_dir / "class_weight.json", {
             "class_weight_for_label": class_weights_json,
             "source": class_weighting,
@@ -1858,6 +2226,10 @@ def main() -> None:
                 "pretraining_overlap_policy", "unspecified"
             ),
             "subjects_per_gpu": subjects_per_gpu,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "effective_subjects_per_optimizer_step": (
+                subjects_per_gpu * world_size * gradient_accumulation_steps
+            ),
             "trials_per_task": trials_per_task,
             "task_present_min_valid_trials": (
                 1 if sample_all_available_below_k else trials_per_task
@@ -1904,8 +2276,7 @@ def main() -> None:
                     "hidden": int(model_cfg.get("residual_hidden", 16)),
                     "include_task_mask": residual_include_task_mask,
                     "input_dim": (
-                        len(TASK_IDS)
-                        * (1 if label_type == "binary" else num_classes)
+                        len(TASK_IDS) * model.output_dim
                         + (
                             len(TASK_IDS)
                             if residual_include_task_mask
@@ -1956,6 +2327,8 @@ def main() -> None:
             "loss": (
                 "binary_cross_entropy_with_logits"
                 if label_type == "binary"
+                else "hierarchical_disease_and_diseased_only_subtype_bce"
+                if label_type == "hierarchical_pd3"
                 else "cross_entropy"
             ),
             "num_trial_views": num_trial_views,
@@ -1968,6 +2341,8 @@ def main() -> None:
             "auxiliary_task_loss": (
                 "per_task_binary_cross_entropy_with_logits"
                 if label_type == "binary"
+                else "unsupported"
+                if label_type == "hierarchical_pd3"
                 else "per_task_cross_entropy"
             ),
             "auxiliary_task_loss_weight": auxiliary_task_loss_weight,
@@ -1982,6 +2357,11 @@ def main() -> None:
             "class_weighting": class_weighting,
             "positive_class_weight": positive_class_weight,
             "class_weights": class_weights_json,
+            "hierarchical_head_weighting": (
+                hierarchical_head_weighting
+                if label_type == "hierarchical_pd3" else None
+            ),
+            "hierarchical_head_weights": hierarchical_head_weights_values,
             "sampling": "epoch_shuffle_without_class_quota",
             "trial_pooling": trial_pooling,
             "sample_all_available_below_k": sample_all_available_below_k,
@@ -2032,12 +2412,24 @@ def main() -> None:
             ],
         })
 
-    steps_per_epoch = len(sampler)
+    microbatches_per_epoch = len(sampler)
+    steps_per_epoch = math.ceil(
+        microbatches_per_epoch / gradient_accumulation_steps
+    )
     total_steps = epochs * steps_per_epoch
-    warmup_epochs = int(train_cfg.get("warmup_epochs", 4))
-    if warmup_epochs <= 0 or warmup_epochs >= epochs:
-        raise ValueError("warmup_epochs must be positive and smaller than epochs")
-    warmup_steps = warmup_epochs * steps_per_epoch
+    if "warmup_steps" in train_cfg:
+        warmup_steps = int(train_cfg["warmup_steps"])
+        if warmup_steps <= 0 or warmup_steps >= total_steps:
+            raise ValueError(
+                "train.warmup_steps must be positive and smaller than total_steps"
+            )
+        warmup_description = f"warmup_steps={warmup_steps}"
+    else:
+        warmup_epochs = int(train_cfg.get("warmup_epochs", 4))
+        if warmup_epochs <= 0 or warmup_epochs >= epochs:
+            raise ValueError("warmup_epochs must be positive and smaller than epochs")
+        warmup_steps = warmup_epochs * steps_per_epoch
+        warmup_description = f"warmup_epochs={warmup_epochs}"
     bf16 = bool(train_cfg.get("bf16", True))
     patience = int(train_cfg.get("early_stopping_patience_epochs", 10))
     early_stopping_min_epochs = int(train_cfg.get("early_stopping_min_epochs", 27))
@@ -2055,17 +2447,23 @@ def main() -> None:
 
     if rank == 0:
         logger.info(
-            "Epoch training: epochs=%d steps_per_epoch=%d total_steps=%d "
-            "warmup_epochs=%d | "
+            "Epoch training: epochs=%d microbatches_per_epoch=%d "
+            "optimizer_steps_per_epoch=%d total_optimizer_steps=%d "
+            "%s | "
             "enc_top_lr=%.2e->%.2e layer_decay=%.3f "
             "head_lr=%.2e->%.2e",
-            epochs, steps_per_epoch, total_steps, warmup_epochs,
+            epochs,
+            microbatches_per_epoch,
+            steps_per_epoch,
+            total_steps,
+            warmup_description,
             encoder_lr, encoder_min_lr, layer_decay, head_lr, head_min_lr,
         )
         logger.info(
-            "Early stop: raw_val_%s min_epochs=%d patience_epochs=%d; "
+            "Early stop: val_%s rule=%s min_epochs=%d patience_epochs=%d; "
             "every new best resets patience",
             selection_metric_name,
+            checkpoint_selection_rule,
             early_stopping_min_epochs,
             patience,
         )
@@ -2076,6 +2474,7 @@ def main() -> None:
     no_improve = 0
     global_step = 0
     val_history: list[float] = []
+    selected_validation_quality: dict[str, float] | None = None
     expected_task_ids = torch.tensor(TASK_IDS, dtype=torch.long).view(1, len(TASK_IDS), 1)
     training_stop_reason = "max_epochs"
     model.train()
@@ -2095,9 +2494,14 @@ def main() -> None:
         epoch_objective_steps = torch.zeros(
             (), dtype=torch.float64, device=device
         )
+        epoch_grad_norm_sum = torch.zeros((), dtype=torch.float64, device=device)
+        epoch_grad_norm_max = torch.zeros((), dtype=torch.float64, device=device)
+        epoch_grad_clip_count = torch.zeros((), dtype=torch.float64, device=device)
+        epoch_optimizer_steps = torch.zeros((), dtype=torch.float64, device=device)
         epoch_start = time.time()
+        optimizer.zero_grad(set_to_none=True)
 
-        for batch in train_loader:
+        for microbatch_index, batch in enumerate(train_loader):
             if len(set(batch["subject_ids"])) != subjects_per_gpu:
                 raise RuntimeError("A local MIL step contains a repeated subject")
             task_present_cpu = batch["task_present_mask"]
@@ -2162,21 +2566,24 @@ def main() -> None:
                     device, non_blocking=True
                 )
 
-            encoder_step_lr, head_step_lr = get_encoder_head_lrs(
-                global_step,
-                warmup_steps,
-                total_steps,
-                encoder_lr,
-                head_lr,
-                encoder_min_lr,
-                head_min_lr,
+            accumulation_position = (
+                microbatch_index % gradient_accumulation_steps
             )
-            set_optimizer_step_lrs(
-                optimizer,
-                encoder_lr=encoder_step_lr,
-                head_lr=head_step_lr,
-            )
-            optimizer.zero_grad(set_to_none=True)
+            if accumulation_position == 0:
+                encoder_step_lr, head_step_lr = get_encoder_head_lrs(
+                    global_step,
+                    warmup_steps,
+                    total_steps,
+                    encoder_lr,
+                    head_lr,
+                    encoder_min_lr,
+                    head_min_lr,
+                )
+                set_optimizer_step_lrs(
+                    optimizer,
+                    encoder_lr=encoder_step_lr,
+                    head_lr=head_step_lr,
+                )
             mixup_permutation = None
             mixup_lambda = None
             loss_labels = labels
@@ -2259,7 +2666,7 @@ def main() -> None:
                 view_logits = output["subject_logits"].reshape(
                     num_trial_views,
                     subjects_per_gpu,
-                    *(() if label_type == "binary" else (num_classes,)),
+                    *(() if raw_model.output_dim == 1 else (raw_model.output_dim,)),
                 )
                 view_mean_logits = view_logits.mean(dim=0)
                 task_logits = None
@@ -2275,7 +2682,7 @@ def main() -> None:
                         num_trial_views,
                         subjects_per_gpu,
                         len(TASK_IDS),
-                        *(() if label_type == "binary" else (num_classes,)),
+                        *(() if raw_model.output_dim == 1 else (raw_model.output_dim,)),
                     )
                     pooled_task_logits = aggregate_trial_view_task_logits(
                         task_logits, mode=trial_view_aggregation
@@ -2295,6 +2702,7 @@ def main() -> None:
                     coverage_mode=task_coverage_loss_weighting,
                     pos_weight=pos_weight,
                     class_weights=class_weights,
+                    hierarchical_head_weights=hierarchical_head_weights,
                 )
                 consistency = (
                     view_logits - view_mean_logits.unsqueeze(0)
@@ -2310,7 +2718,7 @@ def main() -> None:
                             num_trial_views,
                             subjects_per_gpu,
                             len(TASK_IDS),
-                            *(() if label_type == "binary" else (num_classes,)),
+                            *(() if raw_model.output_dim == 1 else (raw_model.output_dim,)),
                         )
                     auxiliary = masked_auxiliary_task_loss(
                         task_logits,
@@ -2330,11 +2738,36 @@ def main() -> None:
                 if raw_model.demographic_head is not None and demographic_head_l2 > 0:
                     loss = loss + demographic_head_l2 * raw_model.demographic_head.weight.square().mean()
             loss.backward()
-            if float(train_cfg.get("grad_clip", 0.0)) > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    model.parameters(), float(train_cfg["grad_clip"])
+            accumulation_count = accumulation_position + 1
+            update_now = (
+                accumulation_count == gradient_accumulation_steps
+                or microbatch_index + 1 == microbatches_per_epoch
+            )
+            if update_now:
+                # Average the accumulated subject losses before AdamW and
+                # clipping.  Dividing gradients here also handles a shorter
+                # final accumulation window without underweighting it.
+                for parameter in model.parameters():
+                    if parameter.grad is not None:
+                        parameter.grad.div_(accumulation_count)
+                grad_clip = float(train_cfg.get("grad_clip", 0.0))
+                raw_grad_norm = torch.nn.utils.clip_grad_norm_(
+                    model.parameters(),
+                    grad_clip if grad_clip > 0 else math.inf,
                 )
-            optimizer.step()
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
+                raw_grad_norm_value = raw_grad_norm.detach().double()
+                epoch_grad_norm_sum += raw_grad_norm_value
+                epoch_grad_norm_max = torch.maximum(
+                    epoch_grad_norm_max, raw_grad_norm_value
+                )
+                if grad_clip > 0:
+                    epoch_grad_clip_count += (
+                        raw_grad_norm_value > grad_clip
+                    ).double()
+                epoch_optimizer_steps += 1
+                global_step += 1
 
             with torch.no_grad():
                 if label_type == "binary":
@@ -2343,6 +2776,34 @@ def main() -> None:
                     )
                     predictions = (logits > 0).long()
                     target_classes = (labels > 0.5).long()
+                elif label_type == "hierarchical_pd3":
+                    disease_losses = F.binary_cross_entropy_with_logits(
+                        logits[:, 0].float(), (labels > 0).float(), reduction="none"
+                    )
+                    subtype_losses = F.binary_cross_entropy_with_logits(
+                        logits[:, 1].float(), (labels == 2).float(), reduction="none"
+                    )
+                    diseased = labels > 0
+                    if torch.any(diseased):
+                        subtype_scale = (
+                            float(labels.numel()) / float(diseased.sum().item())
+                        )
+                        per_subject = 0.5 * (
+                            disease_losses
+                            + subtype_losses
+                            * diseased.to(subtype_losses.dtype)
+                            * subtype_scale
+                        )
+                    else:
+                        # Match the optimized objective: when the batch has no
+                        # diseased subject, only the disease decision exists.
+                        per_subject = disease_losses
+                    predictions = torch.where(
+                        logits[:, 0] <= 0,
+                        torch.zeros_like(labels),
+                        torch.where(logits[:, 1] > 0, 2, 1),
+                    )
+                    target_classes = labels
                 else:
                     per_subject = F.cross_entropy(
                         logits.float(), labels, reduction="none"
@@ -2359,8 +2820,6 @@ def main() -> None:
                 epoch_supervised_objective += supervised.detach().double()
                 epoch_consistency_objective += consistency.detach().double()
                 epoch_objective_steps += 1
-            global_step += 1
-
         totals = torch.stack([
             epoch_loss_sum,
             epoch_loss_weight,
@@ -2369,14 +2828,21 @@ def main() -> None:
             epoch_supervised_objective,
             epoch_consistency_objective,
             epoch_objective_steps,
+            epoch_grad_norm_sum,
+            epoch_grad_clip_count,
+            epoch_optimizer_steps,
         ])
         if world_size > 1:
             dist.all_reduce(totals, op=dist.ReduceOp.SUM)
+            dist.all_reduce(epoch_grad_norm_max, op=dist.ReduceOp.MAX)
         train_loss = float((totals[0] / totals[1]).item())
         train_acc = float((totals[2] / totals[3]).item())
         train_mean_task_coverage = float((totals[1] / totals[3]).item())
         mean_supervised_objective = float((totals[4] / totals[6]).item())
         mean_consistency_objective = float((totals[5] / totals[6]).item())
+        mean_raw_grad_norm = float((totals[7] / totals[9]).item())
+        grad_clip_fraction = float((totals[8] / totals[9]).item())
+        max_raw_grad_norm = float(epoch_grad_norm_max.item())
         elapsed = time.time() - epoch_start
         current_epoch = epoch_index + 1
         audit = sampler.audit_epoch(epoch_index)
@@ -2406,11 +2872,18 @@ def main() -> None:
                 for group in optimizer.param_groups
                 if group["schedule"] == "head"
             ]
+            # A true linear probe has no trainable encoder parameter groups.
+            # Keep epoch logging valid instead of assuming partial/full
+            # fine-tuning and calling min/max on an empty sequence.
+            encoder_lr_min = min(encoder_group_lrs, default=float("nan"))
+            encoder_lr_max = max(encoder_group_lrs, default=float("nan"))
+            head_lr_max = max(head_group_lrs, default=float("nan"))
             logger.info(
                 "E%d/%d S%d train_loss=%.4f train_acc=%.4f val_%s=%.4f "
                 "val_bacc=%.4f obj_sup=%.4f obj_cons=%.4f "
                 "obj_cons_weighted=%.4f lr_enc=%.2e..%.2e "
-                "lr_head=%.2e time=%.0fs",
+                "lr_head=%.2e grad_norm=%.3f grad_max=%.3f "
+                "grad_clip_frac=%.3f time=%.0fs",
                 current_epoch,
                 epochs,
                 global_step,
@@ -2418,15 +2891,38 @@ def main() -> None:
                 train_acc,
                 selection_metric_name,
                 val_auroc,
-                val_metrics["val/subject/balanced_accuracy"],
+                val_metrics[f"val/subject/{balanced_metric_name}"],
                 mean_supervised_objective,
                 mean_consistency_objective,
                 consistency_weight * mean_consistency_objective,
-                min(encoder_group_lrs),
-                max(encoder_group_lrs),
-                max(head_group_lrs),
+                encoder_lr_min,
+                encoder_lr_max,
+                head_lr_max,
+                mean_raw_grad_norm,
+                max_raw_grad_norm,
+                grad_clip_fraction,
                 elapsed,
             )
+            candidate_validation_quality = None
+            if label_type == "binary":
+                candidate_validation_quality = {
+                    "auroc": float(val_metrics["val/subject/auroc"]),
+                    "auprc": float(val_metrics["val/subject/auprc"]),
+                    "balanced_loss_bce": float(
+                        val_metrics["val/subject/balanced_loss_bce"]
+                    ),
+                    "balanced_brier": float(
+                        val_metrics["val/subject/balanced_brier"]
+                    ),
+                    "positives": float(
+                        val_metrics["val/subject/tp"]
+                        + val_metrics["val/subject/fn"]
+                    ),
+                    "negatives": float(
+                        val_metrics["val/subject/tn"]
+                        + val_metrics["val/subject/fp"]
+                    ),
+                }
             checkpoint = {
                 "epoch": current_epoch,
                 "step": global_step,
@@ -2440,12 +2936,35 @@ def main() -> None:
                 "selection_metric": f"val/subject/{selection_metric_name}",
                 "val_auroc_history": val_history,
                 "sampler_audit": audit,
+                "checkpoint_selection_rule": checkpoint_selection_rule,
+                "candidate_validation_quality": candidate_validation_quality,
             }
-            raw_improved = best_raw_epoch < 0 or val_auroc > best_raw_auroc
+            if bool(train_cfg.get("save_every_epoch_checkpoint", False)):
+                epoch_checkpoint = {
+                    key: value
+                    for key, value in checkpoint.items()
+                    if key != "optimizer_state_dict"
+                }
+                atomic_torch_save(
+                    epoch_checkpoint,
+                    output_dir / "epoch_checkpoints" / f"ckpt_epoch{current_epoch:03d}.pt",
+                )
+            if checkpoint_selection_rule == "saturated_binary_balanced_bce":
+                if candidate_validation_quality is None:
+                    raise RuntimeError("Binary checkpoint quality was not computed")
+                raw_improved = saturated_binary_checkpoint_improved(
+                    candidate_validation_quality,
+                    selected_validation_quality,
+                    max_pair_errors=checkpoint_max_pair_errors,
+                    min_auprc=checkpoint_min_auprc,
+                )
+            else:
+                raw_improved = best_raw_epoch < 0 or val_auroc > best_raw_auroc
             checkpoint["best_raw_auroc"] = best_raw_auroc
             checkpoint["best_raw_epoch"] = best_raw_epoch
             checkpoint["best_raw_step"] = best_raw_step
             if raw_improved:
+                selected_validation_quality = candidate_validation_quality
                 best_raw_auroc = val_auroc
                 best_raw_epoch = current_epoch
                 best_raw_step = global_step
@@ -2456,12 +2975,21 @@ def main() -> None:
                 write_prediction_csv(output_dir / "predictions_val_best.csv", val_rows)
                 logger.info(
                     "New best val-%s checkpoint at epoch=%d step=%d "
-                    "val_auc=%.4f; "
+                    "val_auc=%.4f%s; "
                     "early-stop patience reset",
                     selection_metric_name,
                     best_raw_epoch,
                     best_raw_step,
                     best_raw_auroc,
+                    (
+                        " val_auprc=%.4f val_balanced_bce=%.5f"
+                        % (
+                            candidate_validation_quality["auprc"],
+                            candidate_validation_quality["balanced_loss_bce"],
+                        )
+                        if candidate_validation_quality is not None
+                        else ""
+                    ),
                 )
 
             no_improve = update_early_stopping_counter(
@@ -2475,7 +3003,9 @@ def main() -> None:
                     "Early-stop counter=%d/%d%s",
                     no_improve,
                     patience,
-                    " (reset by val-AUROC new best)" if raw_improved else "",
+                    " (reset by validation checkpoint improvement)"
+                    if raw_improved
+                    else "",
                 )
             atomic_torch_save(checkpoint, output_dir / "ckpt_last.pt")
             write_json(output_dir / "metrics_last.json", {
@@ -2484,6 +3014,10 @@ def main() -> None:
                 "train/subject_loss": train_loss,
                 "train/subject_accuracy": train_acc,
                 "train/mean_task_coverage_weight": train_mean_task_coverage,
+                "train/raw_grad_norm_mean": mean_raw_grad_norm,
+                "train/raw_grad_norm_max": max_raw_grad_norm,
+                "train/grad_clip_fraction": grad_clip_fraction,
+                "train/optimizer_steps": int(totals[9].item()),
                 "early_stopping_no_improve_epochs": no_improve,
                 "sampler_audit": audit,
                 **val_metrics,
@@ -2594,9 +3128,14 @@ def main() -> None:
             # decision rule unstable even though AUROC was unchanged.
             threshold = 0.5
             val_bacc = float(val_metrics["val/subject/balanced_accuracy"])
+        elif label_type == "hierarchical_pd3":
+            threshold = 0.5
+            val_bacc = float(val_metrics["val/subject/balanced_accuracy"])
         else:
             threshold = None
-            val_bacc = float(val_metrics["val/subject/balanced_accuracy"])
+            val_bacc = float(
+                val_metrics[f"val/subject/{balanced_metric_name}"]
+            )
         write_prediction_csv(output_dir / "predictions_val_best.csv", val_rows)
         selected_step = int(best_checkpoint["step"])
         selected_epoch = int(best_checkpoint["epoch"])
@@ -2606,8 +3145,15 @@ def main() -> None:
             "best_val_auroc": float(
                 val_metrics[f"val/subject/{selection_metric_name}"]
             ),
-            "checkpoint_selection_metric": (
-                f"val/subject/{selection_metric_name}"
+            "best_val_selection_score": float(
+                val_metrics[f"val/subject/{selection_metric_name}"]
+            ),
+                "checkpoint_selection_metric": (
+                    f"val/subject/{selection_metric_name}"
+                ),
+            "checkpoint_selection_rule": checkpoint_selection_rule,
+            "selected_validation_quality": best_checkpoint.get(
+                "candidate_validation_quality"
             ),
             "early_stopping_metric": f"val/subject/{selection_metric_name}",
             "label_type": label_type,
@@ -2627,18 +3173,31 @@ def main() -> None:
                 "val_balanced_accuracy_at_fixed_threshold": val_bacc,
                 "val_default_05": val_metrics,
             })
+        elif label_type == "hierarchical_pd3":
+            val_result.update({
+                "decision_rule": "disease_sigmoid_then_subtype_sigmoid",
+                "disease_threshold": 0.5,
+                "subtype_threshold": 0.5,
+                "subtype_positive_class": "tremor_spectrum",
+                "val_balanced_accuracy": val_bacc,
+                "balanced_accuracy_metric": "val/subject/balanced_accuracy",
+            })
         else:
             val_result.update({
                 "decision_rule": "argmax",
                 "val_balanced_accuracy": val_bacc,
+                "balanced_accuracy_metric": (
+                    f"val/subject/{balanced_metric_name}"
+                ),
             })
         write_json(output_dir / "metrics_val_best.json", val_result)
         if args.skip_test:
             logger.info(
-                "Best epoch=%d step=%d val_auroc=%.4f | test skipped by request",
+                "Best epoch=%d step=%d val_%s=%.4f | test skipped by request",
                 selected_epoch,
                 selected_step,
-                val_result["best_val_auroc"],
+                selection_metric_name,
+                val_result["best_val_selection_score"],
             )
         else:
             test_metrics, test_rows = evaluate_subjects(
@@ -2676,13 +3235,16 @@ def main() -> None:
                     "test": test_metrics,
                 }
                 logger.info(
-                    "Best epoch=%d step=%d val_macro_auroc=%.4f | "
-                    "test_macro_auroc=%.4f test_bacc=%.4f",
+                    "Best epoch=%d step=%d val_%s=%.4f | "
+                    "test_balacc=%.4f test_weighted_f1=%.4f "
+                    "test_kappa=%.4f",
                     selected_epoch,
                     selected_step,
-                    val_result["best_val_auroc"],
-                    test_metrics["test/subject/macro_auroc_ovr"],
+                    selection_metric_name,
+                    val_result["best_val_selection_score"],
                     test_metrics["test/subject/balanced_accuracy"],
+                    test_metrics["test/subject/weighted_f1"],
+                    test_metrics["test/subject/cohen_kappa"],
                 )
             write_json(output_dir / "metrics_test.json", test_payload)
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用训练完成的 tokenizer 预计算 code IDs，供 BERT 全程只读缓存。
+"""使用训练完成的 tokenizer 预计算离散 code IDs 或连续 AE latent。
 
 code IDs 只依赖输入和固定 tokenizer，因此这里只编码一次；正式 BERT
 训练进程不会构造 tokenizer，也没有动态回退路径。
@@ -15,7 +15,7 @@ GPU 利用率高。DDP 4 卡并行: 数据按 trial 切分到各 rank, 每卡 ba
 用法 (4卡):
   torchrun --nproc_per_node=4 --master_port=29657 \
       -m eyemae.eyevq.precompute_codes \
-      --config configs/eyevq/pretrain_joint.yaml \
+      --config configs/eyevq/final/bert.yaml \
       --tokenizer-checkpoint outputs/eyevq/tokenizer_joint_fsq9755_50k/ckpt_final.pt \
       --out outputs/eyevq/code_ids_joint_fsq9755_50k_v2.npz --split all --n-batch 512
 """
@@ -114,6 +114,8 @@ def main():
         cfg = yaml.safe_load(config_file)
     override_fsq_levels(cfg, args.fsq_levels)
     train_cfg = cfg["train"]
+    target_type = str(cfg.get("bert", {}).get("target_type", "joint_code"))
+    continuous_target = target_type == "normalized_latent"
     tokenizer_checkpoint = args.tokenizer_checkpoint or train_cfg["tokenizer_checkpoint"]
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     data_path = train_cfg["data_path"]
@@ -189,7 +191,13 @@ def main():
 
     # 本地编码
     gids = []
-    code_arr = np.zeros((n_local, max_patches, 2), dtype=np.int16)
+    if continuous_target:
+        code_dim = int(cfg["vq"]["code_dim"])
+        target_arr = np.zeros(
+            (n_local, max_patches, 2, code_dim), dtype=np.float16
+        )
+    else:
+        target_arr = np.zeros((n_local, max_patches, 2), dtype=np.int16)
     npatch_arr = np.zeros(n_local, dtype=np.int16)
     t0 = time.time()
     done = 0
@@ -212,12 +220,22 @@ def main():
             gids.append(str(item["global_trial_id"]))
             npatch_arr[done + b] = n
         with torch.no_grad():
-            cids = tokenizer.encode_codes(stim, content, quality, pad, nm)
-            cids = mask_invalid_eye_codes(
-                cids, nm, pad, float(cfg["vq"].get("min_nonmissing_frac", 0.50))
-            )
-            cids = cids.cpu().numpy().astype(np.int16)
-        code_arr[done:hi] = cids
+            if continuous_target:
+                targets = tokenizer.encode_latents(stim, content, quality, pad, nm)
+                valid_eye = (
+                    (nm >= float(cfg["vq"].get("min_nonmissing_frac", 0.50)))
+                    & (~pad.unsqueeze(-1))
+                )
+                targets = targets.masked_fill(~valid_eye.unsqueeze(-1), 0)
+                targets = targets.cpu().numpy().astype(np.float16)
+            else:
+                targets = tokenizer.encode_codes(stim, content, quality, pad, nm)
+                targets = mask_invalid_eye_codes(
+                    targets, nm, pad,
+                    float(cfg["vq"].get("min_nonmissing_frac", 0.50)),
+                )
+                targets = targets.cpu().numpy().astype(np.int16)
+        target_arr[done:hi] = targets
         done = hi
         if rank == 0 and done % 10000 < args.n_batch:
             el = time.time() - t0
@@ -226,7 +244,9 @@ def main():
     # 保存分片
     shard = f"{args.out}.rank{rank}.npz"
     np.savez_compressed(shard, gids=np.array(gids, dtype=object),
-                        code_ids=code_arr, num_patches=npatch_arr)
+                        **({"latent_targets": target_arr} if continuous_target
+                           else {"code_ids": target_arr}),
+                        target_type=np.array(target_type), num_patches=npatch_arr)
     if rank == 0:
         el = time.time() - t0
         print(f"rank0 完成 {n_local:,} trials in {el:.0f}s | 分片 → {shard}", flush=True)
@@ -235,19 +255,20 @@ def main():
     if dist is not None:
         dist.barrier(device_ids=[local_rank] if device.type == "cuda" else None)
     if rank == 0:
-        all_gids, all_code, all_np = [], [], []
+        all_gids, all_targets, all_np = [], [], []
         for r in range(world_size):
             s = np.load(f"{args.out}.rank{r}.npz", allow_pickle=True)
             all_gids.extend(s["gids"].tolist())
-            all_code.append(s["code_ids"])
+            key = "latent_targets" if continuous_target else "code_ids"
+            all_targets.append(s[key])
             all_np.append(s["num_patches"])
-        code_ids = np.concatenate(all_code, axis=0)
+        cached_targets = np.concatenate(all_targets, axis=0)
         npatch = np.concatenate(all_np, axis=0)
         gids_arr = np.array(all_gids, dtype=object)
         # 按 gid 排序保持一致
         order = np.argsort(gids_arr, kind="stable")
         gids_arr = gids_arr[order]
-        code_ids = code_ids[order]
+        cached_targets = cached_targets[order]
         npatch = npatch[order]
         output_path = Path(args.out)
         temporary_path = output_path.with_name(output_path.name + ".tmp.npz")
@@ -256,13 +277,15 @@ def main():
             format_version=np.int64(CACHE_FORMAT_VERSION),
             lr_layout=np.array("time_major_lr_v1"),
             invalid_eye_code_id=np.int64(0),
+            target_type=np.array(target_type),
             min_nonmissing_frac=np.float64(cfg["vq"].get("min_nonmissing_frac", 0.50)),
             patch_samples=np.int64(patch_samples),
             tokenizer_checkpoint=np.array(str(Path(tokenizer_checkpoint).resolve())),
             tokenizer_sha256=np.array(tokenizer_sha256),
             cache_contract_sha256=np.array(contract_sha256),
             gids=gids_arr,
-            code_ids=code_ids,
+            **({"latent_targets": cached_targets} if continuous_target
+               else {"code_ids": cached_targets}),
             num_patches=npatch,
         )
         temporary_path.replace(output_path)

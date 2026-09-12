@@ -29,7 +29,7 @@ def _trial(subject_id: str, labels_left, labels_right, x=0.0, y=0.0, area=1000.0
 
 
 def test_missing_blink_and_subject_suffix_rules() -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     stats = {"global": {"median": np.log1p(1000), "mad": 1.0}, "subjects": {}}
     p = preprocess_trial(_trial("s001D", [2, 1, 0], [0, 0, 0], x=0, y=0, area=1000), cfg, stats)
     assert p["quality"][0, 0, 0] == 1
@@ -46,7 +46,7 @@ def test_missing_blink_and_subject_suffix_rules() -> None:
     assert left_only["quality"][:, 1, 0].all()
     right_only = preprocess_trial(_trial("s001R", [0, 0], [0, 0]), cfg, stats)
     assert right_only["quality"][:, 0, 0].all()
-    cfg_not_enforced = load_config("configs/debug.yaml")
+    cfg_not_enforced = load_config("tests/fixtures/preprocessing.yaml")
     cfg_not_enforced["data"]["enforce_suffix_eye_availability"] = False
     left_only_not_enforced = preprocess_trial(_trial("s001L", [0, 0], [0, 0]), cfg_not_enforced, stats)
     assert not left_only_not_enforced["quality"].any()
@@ -58,7 +58,7 @@ def test_missing_blink_and_subject_suffix_rules() -> None:
 
 
 def test_per_eye_area_normalization_uses_distinct_eye_stats() -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     cfg["area"].update({
         "use_log1p": False,
         "per_eye": True,
@@ -95,7 +95,7 @@ def test_per_eye_area_normalization_uses_distinct_eye_stats() -> None:
 
 
 def test_sparse_eye_falls_back_to_subject_pooled_stats() -> None:
-    cfg = load_config("configs/debug.yaml")
+    cfg = load_config("tests/fixtures/preprocessing.yaml")
     cfg["area"].update({
         "use_log1p": False,
         "per_eye": True,
